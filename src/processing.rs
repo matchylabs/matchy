@@ -461,21 +461,10 @@ impl Worker {
                     None
                 };
 
-                // Perform lookup (don't stringify yet - defer until we know we have a match)
-                let result_opt = match &item.item {
-                    ExtractedItem::Ipv4(ip) => database
-                        .lookup_ip(std::net::IpAddr::V4(*ip))
-                        .map_err(|e| e.to_string())?,
-                    ExtractedItem::Ipv6(ip) => database
-                        .lookup_ip(std::net::IpAddr::V6(*ip))
-                        .map_err(|e| e.to_string())?,
-                    ExtractedItem::Domain(s)
-                    | ExtractedItem::Email(s)
-                    | ExtractedItem::Hash(_, s)
-                    | ExtractedItem::Bitcoin(s)
-                    | ExtractedItem::Ethereum(s)
-                    | ExtractedItem::Monero(s) => database.lookup(s).map_err(|e| e.to_string())?,
-                };
+                // Use original string slice for lookup (avoids IP to_string conversion)
+                // Database.lookup() handles IP parsing internally and uses the string for caching
+                let query_str = item.as_str(data);
+                let result_opt = database.lookup(query_str).map_err(|e| e.to_string())?;
 
                 if let Some(start) = lookup_start {
                     self.stats.lookup_time += start.elapsed();
