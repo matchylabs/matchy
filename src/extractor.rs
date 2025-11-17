@@ -759,9 +759,10 @@ impl Extractor {
     }
 
     /// Try to parse an IPv4 address starting at position
+    /// Zero-allocation: parses digits directly from bytes into fixed-size array
     fn try_parse_ipv4(&self, line: &[u8], start: usize) -> Option<(Ipv4Addr, usize)> {
         let mut pos = start;
-        let mut octets = Vec::new();
+        let mut octets = [0u8; 4]; // Stack-allocated, no heap allocation
 
         // Check word boundary at start if required
         if self.require_word_boundaries && start > 0 && !is_word_boundary(line[start - 1]) {
@@ -770,12 +771,14 @@ impl Extractor {
 
         // Parse up to 4 octets
         for octet_idx in 0..4 {
-            // Parse octet (1-3 digits)
-            let mut octet_str = String::new();
+            // Parse octet (1-3 digits) directly from bytes without allocation
+            let mut octet_value: u16 = 0; // u16 to detect overflow (> 255)
             let mut digit_count = 0;
+            let octet_start = pos;
 
             while pos < line.len() && line[pos].is_ascii_digit() && digit_count < 3 {
-                octet_str.push(line[pos] as char);
+                let digit = (line[pos] - b'0') as u16;
+                octet_value = octet_value * 10 + digit;
                 pos += 1;
                 digit_count += 1;
             }
@@ -784,13 +787,18 @@ impl Extractor {
                 return None; // No digits found
             }
 
-            // Parse octet value (u8::parse already ensures 0-255 range)
-            let octet: u8 = match octet_str.parse() {
-                Ok(val) => val,
-                _ => return None, // Invalid octet
-            };
+            // Validate octet is in range 0-255
+            if octet_value > 255 {
+                return None;
+            }
 
-            octets.push(octet);
+            // Reject leading zeros (except "0" itself)
+            // e.g., "192.168.01.1" is invalid
+            if digit_count > 1 && line[octet_start] == b'0' {
+                return None;
+            }
+
+            octets[octet_idx] = octet_value as u8;
 
             // Expect dot after first 3 octets
             if octet_idx < 3 {
@@ -806,12 +814,8 @@ impl Extractor {
             return None;
         }
 
-        if octets.len() == 4 {
-            let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
-            Some((ip, pos))
-        } else {
-            None
-        }
+        let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
+        Some((ip, pos))
     }
 
     /// Extract email addresses using SIMD-accelerated @ search
