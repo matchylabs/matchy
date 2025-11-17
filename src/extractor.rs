@@ -134,6 +134,7 @@ impl ExtractorBuilder {
             tld_matcher,
             double_colon_finder,
             ox_finder,
+            boundaries_buffer: std::cell::RefCell::new(Vec::new()),
         })
     }
 }
@@ -351,6 +352,8 @@ pub struct Extractor {
     double_colon_finder: memchr::memmem::Finder<'static>,
     /// Pre-built memchr finder for 0x (Ethereum addresses)
     ox_finder: memchr::memmem::Finder<'static>,
+    /// Reusable buffer for word boundaries (reduced allocations)
+    boundaries_buffer: std::cell::RefCell<Vec<usize>>,
 }
 
 impl Extractor {
@@ -398,12 +401,16 @@ impl Extractor {
 
         // Pre-compute word boundaries once if any boundary-dependent extractors are enabled
         // This eliminates redundant scans across Bitcoin, hash, and Monero extractors
+        // Use the reusable buffer to avoid repeated allocations per chunk
         let boundaries = if self.extract_hashes || self.extract_bitcoin || self.extract_monero {
-            Some(find_word_boundaries(chunk))
+            let mut buf = self.boundaries_buffer.borrow_mut();
+            buf.clear();
+            find_word_boundaries_into(chunk, &mut buf);
+            Some(buf)
         } else {
             None
         };
-        let boundaries_ref = boundaries.as_deref();
+        let boundaries_ref = boundaries.as_deref().map(|v| &**v);
 
         // Extract IPv6 (::) in one pass over entire chunk
         if self.extract_ipv6 {
@@ -1646,20 +1653,24 @@ fn is_all_hex_simd(bytes: &[u8]) -> bool {
     bytes.iter().all(|&b| is_hex_char_fast(b))
 }
 
-/// Find all word boundary positions in chunk
-/// Returns sorted vec of positions where tokens start/end
+/// Find all word boundary positions in chunk and append to provided buffer
+/// Appends sorted positions where tokens start/end
 /// A token is a sequence of non-boundary characters
 ///
 /// Public for use by processing infrastructure to pre-compute boundaries
-pub(crate) fn find_word_boundaries(chunk: &[u8]) -> Vec<usize> {
-    // Pre-allocate with estimated capacity to avoid reallocations
+/// The buffer is expected to be cleared by the caller for reuse
+pub(crate) fn find_word_boundaries_into(chunk: &[u8], boundaries: &mut Vec<usize>) {
+    if chunk.is_empty() {
+        return;
+    }
+
+    // Ensure capacity to avoid reallocations
     // Typical logs have boundary transitions at ~25-30% of byte positions
     // Each token produces 2 boundaries (start + end)
     // For 128KB chunk: ~32,000-40,000 boundaries typical
-    let mut boundaries = Vec::with_capacity(chunk.len() / 4);
-
-    if chunk.is_empty() {
-        return boundaries;
+    let additional = chunk.len() / 4;
+    if boundaries.capacity() < boundaries.len() + additional {
+        boundaries.reserve(additional);
     }
 
     // Track if we're currently inside a token
@@ -1687,7 +1698,16 @@ pub(crate) fn find_word_boundaries(chunk: &[u8]) -> Vec<usize> {
     if in_token {
         boundaries.push(chunk.len());
     }
+}
 
+/// Find all word boundary positions in chunk (allocating version)
+/// Returns sorted vec of positions where tokens start/end
+/// A token is a sequence of non-boundary characters
+///
+/// Prefer `find_word_boundaries_into` with a reusable buffer for better performance
+pub(crate) fn find_word_boundaries(chunk: &[u8]) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    find_word_boundaries_into(chunk, &mut boundaries);
     boundaries
 }
 
