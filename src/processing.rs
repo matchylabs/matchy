@@ -461,28 +461,20 @@ impl Worker {
                     None
                 };
 
-                let (result_opt, matched_text) = match &item.item {
-                    ExtractedItem::Ipv4(ip) => {
-                        let result = database
-                            .lookup_ip(std::net::IpAddr::V4(*ip))
-                            .map_err(|e| e.to_string())?;
-                        (result, ip.to_string())
-                    }
-                    ExtractedItem::Ipv6(ip) => {
-                        let result = database
-                            .lookup_ip(std::net::IpAddr::V6(*ip))
-                            .map_err(|e| e.to_string())?;
-                        (result, ip.to_string())
-                    }
+                // Perform lookup (don't stringify yet - defer until we know we have a match)
+                let result_opt = match &item.item {
+                    ExtractedItem::Ipv4(ip) => database
+                        .lookup_ip(std::net::IpAddr::V4(*ip))
+                        .map_err(|e| e.to_string())?,
+                    ExtractedItem::Ipv6(ip) => database
+                        .lookup_ip(std::net::IpAddr::V6(*ip))
+                        .map_err(|e| e.to_string())?,
                     ExtractedItem::Domain(s)
                     | ExtractedItem::Email(s)
                     | ExtractedItem::Hash(_, s)
                     | ExtractedItem::Bitcoin(s)
                     | ExtractedItem::Ethereum(s)
-                    | ExtractedItem::Monero(s) => {
-                        let result = database.lookup(s).map_err(|e| e.to_string())?;
-                        (result, s.to_string())
-                    }
+                    | ExtractedItem::Monero(s) => database.lookup(s).map_err(|e| e.to_string())?,
                 };
 
                 if let Some(start) = lookup_start {
@@ -498,8 +490,12 @@ impl Worker {
 
                     self.stats.matches_found += 1;
 
+                    // Only stringify when we have a match - extract original text from input
+                    // Use Match::as_str() which safely extracts the text using validated spans
+                    let matched_text = item.as_str(data).to_string();
+
                     results.push(MatchResult {
-                        matched_text: matched_text.clone(),
+                        matched_text,
                         match_type: item.item.type_name().to_string(),
                         result: query_result,
                         database_id: database_id.clone(),
