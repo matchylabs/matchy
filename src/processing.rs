@@ -218,7 +218,9 @@ impl LineFileReader {
             read_buffer: vec![0u8; chunk_size],
             current_line_number: 1,
             eof: false,
-            leftover: Vec::new(),
+            // Pre-allocate leftover buffer to avoid runtime allocations
+            // Size it to handle worst case: full chunk with no newline
+            leftover: Vec::with_capacity(chunk_size),
         })
     }
 
@@ -266,7 +268,7 @@ impl LineFileReader {
             return Ok(None);
         }
 
-        // Combine with leftover from previous read
+        // Combine with leftover from previous read (zero-copy ownership transfer)
         let mut combined = std::mem::take(&mut self.leftover);
         combined.extend_from_slice(&self.read_buffer[..bytes_read]);
 
@@ -279,11 +281,13 @@ impl LineFileReader {
             return self.next_batch(); // Try to read more
         };
 
-        // Split at last newline
-        let chunk = combined[..chunk_end].to_vec();
-        if chunk_end < combined.len() {
-            self.leftover = combined[chunk_end..].to_vec();
+        // Split at last newline using Vec::split_off (zero-copy, just adjusts pointers)
+        // This is O(1) pointer math, not O(n) memcpy
+        let mut chunk = combined;
+        if chunk_end < chunk.len() {
+            self.leftover = chunk.split_off(chunk_end);
         }
+        chunk.truncate(chunk_end);
 
         // Pre-compute newline offsets (avoid duplicate memchr in workers)
         let line_offsets: Vec<usize> = memchr::memchr_iter(b'\n', &chunk).collect();
