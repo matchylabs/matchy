@@ -103,10 +103,12 @@ impl ExtractorBuilder {
     /// Build the Extractor
     pub fn build(self) -> Result<Extractor, ParaglobError> {
         // Load embedded TLD automaton if domain extraction enabled
-        // TLD_AUTOMATON is compiled into the binary at build time
+        // TLD_AUTOMATON is compiled into the binary at build time as a static
+        // Use from_mmap for zero-copy - no heap allocation, just borrows the .rodata section
         let tld_matcher = if self.extract_domains {
-            let paraglob =
-                crate::serialization::from_bytes(TLD_AUTOMATON, MatchMode::CaseInsensitive)?;
+            let paraglob = unsafe {
+                crate::paraglob_offset::Paraglob::from_mmap(TLD_AUTOMATON, MatchMode::CaseInsensitive)?
+            };
             Some(paraglob)
         } else {
             None
