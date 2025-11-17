@@ -700,8 +700,9 @@ fn chunk_size_for(file_size: u64) -> usize {
     }
 }
 
-/// Reader thread: chunks files and sends batches to worker queue
-fn reader_thread(file_path: PathBuf, work_sender: Sender<WorkUnit>) -> Result<(), String> {
+/// Reader thread worker: chunks a single file and sends batches to worker queue
+/// Called by reader threads in the reader pool as they pull files from the file queue
+fn reader_thread_chunker(file_path: PathBuf, work_sender: &Sender<WorkUnit>) -> Result<(), String> {
     // Special handling for stdin (can't stat it)
     let is_stdin = file_path.to_str() == Some("-");
 
@@ -830,10 +831,15 @@ where
     let num_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let _num_readers = num_readers.unwrap_or(num_cpus / 2).max(1);
+    let num_readers = num_readers.unwrap_or(num_cpus / 2).max(1);
     let num_workers = num_workers.unwrap_or(num_cpus);
 
-    // Work queue: readers and main thread send WorkUnits here
+    // Two-queue architecture for dynamic work distribution:
+    // 1. file_queue: Files that need chunking (readers pull from here)
+    // 2. work_queue: Work units ready to process (workers pull from here)
+    let (file_sender, file_receiver) = channel::<PathBuf>();
+    let file_receiver = Arc::new(Mutex::new(file_receiver));
+
     let (work_sender, work_receiver) = channel::<WorkUnit>();
     let work_receiver = Arc::new(Mutex::new(work_receiver));
 
@@ -846,7 +852,33 @@ where
         std::collections::HashMap::<usize, WorkerStats>::new(),
     ));
 
+    // Spawn bounded reader thread pool
+    // Readers pull files from file_queue, chunk them, and push chunks to work_queue
+    let mut reader_handles = Vec::new();
+    for _reader_id in 0..num_readers {
+        let file_rx = Arc::clone(&file_receiver);
+        let work_tx = work_sender.clone();
+
+        let handle = thread::spawn(move || {
+            // Pull files from queue and chunk them
+            loop {
+                let file_path = match file_rx.lock().unwrap().recv() {
+                    Ok(path) => path,
+                    Err(_) => break, // File queue closed
+                };
+
+                // Chunk this file and send chunks to work queue
+                if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
+                    eprintln!("Reader error: {}", e);
+                }
+            }
+        });
+
+        reader_handles.push(handle);
+    }
+
     // Spawn worker threads
+    // Workers pull work units from work_queue and process them
     let mut worker_handles = Vec::new();
     for worker_id in 0..num_workers {
         let receiver = Arc::clone(&work_receiver);
@@ -931,9 +963,7 @@ where
         worker_handles.push(handle);
     }
 
-    // Main thread: analyze files and route to appropriate handling
-    let mut reader_handles = Vec::new();
-    let mut remaining = files.len();
+    // Main thread: analyze files and route to appropriate queue
     let mut routing_stats = RoutingStats::default();
 
     for file_path in files {
@@ -941,47 +971,43 @@ where
         let is_stdin = file_path.to_str() == Some("-");
 
         if is_stdin {
-            // Always route stdin to a reader thread (can't stat it)
+            // Always route stdin to file queue for chunking (can't stat it)
             routing_stats.files_to_readers += 1;
-            // Size unknown for stdin
-            routing_stats.bytes_to_readers += 0;
+            routing_stats.bytes_to_readers += 0; // Size unknown
 
-            let work_sender_clone = work_sender.clone();
-            let handle = thread::spawn(move || reader_thread(file_path, work_sender_clone));
-            reader_handles.push(handle);
+            file_sender
+                .send(file_path)
+                .map_err(|_| "File queue closed unexpectedly")?;
         } else {
-            // Regular file - get size and apply chunking algorithm
+            // Regular file - get size and decide routing
             let file_size = fs::metadata(&file_path)
                 .map_err(|e| format!("Failed to stat {}: {}", file_path.display(), e))?
                 .len();
 
-            // Apply chunking algorithm
-            let should_chunk = remaining < num_workers && file_size >= SMALL_FILE;
-
-            if should_chunk {
-                // Spawn reader thread to chunk this file
+            // Routing decision: small files go directly to workers, large files to readers for chunking
+            // This is simple and works well for large-scale workloads with mixed file sizes
+            if file_size >= SMALL_FILE {
+                // Large file: send to file queue for chunking
                 routing_stats.files_to_readers += 1;
                 routing_stats.bytes_to_readers += file_size;
 
-                let work_sender_clone = work_sender.clone();
-                let handle = thread::spawn(move || reader_thread(file_path, work_sender_clone));
-                reader_handles.push(handle);
+                file_sender
+                    .send(file_path)
+                    .map_err(|_| "File queue closed unexpectedly")?;
             } else {
-                // Send whole file directly to worker queue
+                // Small file: send directly to work queue as whole file
                 routing_stats.files_to_workers += 1;
                 routing_stats.bytes_to_workers += file_size;
 
                 work_sender
                     .send(WorkUnit::WholeFile { path: file_path })
-                    .map_err(|_| "Worker channel closed")?;
+                    .map_err(|_| "Work queue closed unexpectedly")?;
             }
         }
-
-        remaining -= 1;
     }
 
-    // Drop main thread's sender so workers know when all work is queued
-    drop(work_sender);
+    // Close file queue - readers will finish their current files and exit
+    drop(file_sender);
 
     // Wait for all reader threads to finish
     for handle in reader_handles {
@@ -989,6 +1015,9 @@ where
             eprintln!("Reader thread panicked: {:?}", e);
         }
     }
+
+    // Now that all readers are done, close work queue - workers will drain and exit
+    drop(work_sender);
 
     // Wait for all worker threads to finish and collect results
     let mut all_matches = Vec::new();

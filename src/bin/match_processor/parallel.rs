@@ -82,10 +82,10 @@ impl ExtractorConfig {
 pub use matchy::processing::LineBatch;
 
 /// Auto-tune thread count based on workload characteristics
+/// Optimized for large-scale workloads (thousands of files, multi-TB datasets)
 /// Returns (num_readers, num_workers)
 fn auto_tune_thread_count(inputs: &[PathBuf], show_stats: bool) -> (usize, usize) {
     // Get available parallelism (physical cores or CPU quota)
-    // More reliable than gdt_cpus, especially on ARM systems
     let physical_cores = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
@@ -105,23 +105,30 @@ fn auto_tune_thread_count(inputs: &[PathBuf], show_stats: bool) -> (usize, usize
         })
         .count();
 
-    // Decision logic:
-    // - Single file or stdin: use all cores (single reader, N-1 workers)
-    // - Multiple files: balance readers and workers
-    // - Compressed files: may benefit from more workers (decompression is CPU-intensive)
+    // Strategy for large-scale workloads:
+    // - Many files: workers process whole files directly (minimal reader overhead)
+    // - Few files: readers chunk large files to keep workers busy
+    // - Runtime routing handles mixed file sizes dynamically
 
-    let (num_readers, num_workers) = if file_count <= 1 {
-        // Single file: 1 reader, rest workers
-        (1, physical_cores.saturating_sub(1).max(1))
-    } else if compressed_count > file_count / 2 {
-        // Mostly compressed: decompression is CPU-intensive, allocate ~40% to readers
-        // Gzip decompression can easily saturate 1-2 cores per stream
-        let readers = (physical_cores * 2 / 5).max(2).min(file_count);
+    let (num_readers, num_workers) = if file_count > physical_cores * 2 {
+        // Many files scenario (common for large-scale workloads)
+        // Small files go directly to workers, only large files get chunked
+        // Minimal readers (1-2), maximize workers
+        let readers = if compressed_count > 0 { 2 } else { 1 };
         let workers = physical_cores.saturating_sub(readers).max(1);
         (readers, workers)
+    } else if file_count <= 1 {
+        // Single file: must chunk to keep workers busy
+        (1, physical_cores.saturating_sub(1).max(1))
     } else {
-        // Mixed or uncompressed: balance readers and workers  (1/3 readers, 2/3 workers)
-        let readers = (physical_cores / 3).max(1).min(file_count);
+        // Few files (2 to 2*cores): chunk them to maximize parallelism
+        // For compressed files, workers handle decompression (CPU-intensive)
+        // so still prioritize workers over readers
+        let readers = if compressed_count > file_count / 2 {
+            2 // Compressed: 2 readers, rest workers
+        } else {
+            (physical_cores / 4).max(1).min(3) // Uncompressed: ~25% readers, capped at 3
+        };
         let workers = physical_cores.saturating_sub(readers).max(1);
         (readers, workers)
     };
@@ -140,12 +147,12 @@ fn auto_tune_thread_count(inputs: &[PathBuf], show_stats: bool) -> (usize, usize
             num_readers, num_workers
         );
 
-        if file_count <= 1 {
-            eprintln!("[INFO] Strategy: Single file - maximize workers");
-        } else if compressed_count > file_count / 2 {
-            eprintln!("[INFO] Strategy: Compressed files - prioritize workers for decompression");
+        if file_count > physical_cores * 2 {
+            eprintln!("[INFO] Strategy: Large-scale workload - workers process files directly");
+        } else if file_count <= 1 {
+            eprintln!("[INFO] Strategy: Single file - chunk to maximize parallelism");
         } else {
-            eprintln!("[INFO] Strategy: Balanced readers/workers for I/O and processing");
+            eprintln!("[INFO] Strategy: Few files - chunk large files to keep workers busy");
         }
     }
 
@@ -194,7 +201,7 @@ pub fn process_parallel(
     usize,
     matchy::processing::RoutingStats,
 )> {
-    // Determine reader and worker counts using same logic
+    // Determine reader and worker counts
     let (num_readers, num_workers) = if let Some(readers) = explicit_readers {
         // Explicit reader count specified
         let workers = if num_threads == 0 {
@@ -212,34 +219,26 @@ pub fn process_parallel(
         // Full auto-tune
         auto_tune_thread_count(&inputs, show_stats)
     } else {
-        // Explicit thread count only - auto-tune readers based on workload
+        // Explicit thread count only - use simplified auto-tune for readers
         let file_count = inputs.iter().filter(|p| p.to_str() != Some("-")).count();
-        let compressed_count = inputs
-            .iter()
-            .filter(|p| {
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("bz2"))
-                    .unwrap_or(false)
-            })
-            .count();
 
-        let (readers, workers) = if file_count <= 1 {
-            (1, num_threads)
-        } else if compressed_count > file_count / 2 {
-            let readers = (num_threads * 2 / 5).max(2).min(file_count);
-            let workers = num_threads.saturating_sub(readers).max(1);
-            (readers, workers)
+        // Apply same strategy as full auto-tune, but with explicit total thread count
+        let readers = if file_count > num_threads * 2 {
+            // Many files: minimal readers
+            1
+        } else if file_count <= 1 {
+            // Single file: 1 reader
+            1
         } else {
-            let readers = (num_threads / 3).max(1).min(file_count);
-            let workers = num_threads.saturating_sub(readers).max(1);
-            (readers, workers)
+            // Few files: allocate ~25% to readers, capped at 3
+            (num_threads / 4).max(1).min(3)
         };
+        let workers = num_threads.saturating_sub(readers).max(1);
 
         if show_stats {
             eprintln!(
-                "[INFO] Auto-tuned readers: {} reader(s), {} worker(s) (total: {})",
-                readers, workers, num_threads
+                "[INFO] Configuration: {} reader(s), {} worker(s)",
+                readers, workers
             );
         }
 
