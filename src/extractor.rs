@@ -1645,7 +1645,10 @@ fn is_all_hex_simd(bytes: &[u8]) -> bool {
 ///
 /// Public for use by processing infrastructure to pre-compute boundaries
 pub(crate) fn find_word_boundaries(chunk: &[u8]) -> Vec<usize> {
-    let mut boundaries = Vec::new();
+    // Pre-allocate with estimated capacity to avoid reallocations
+    // Typical log lines have ~10-20 tokens per 128KB chunk
+    // Over-allocate slightly to avoid growth in most cases
+    let mut boundaries = Vec::with_capacity(chunk.len() / 1000);
 
     if chunk.is_empty() {
         return boundaries;
