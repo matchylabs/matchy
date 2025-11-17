@@ -1082,8 +1082,11 @@ impl Extractor {
 
         let mut last_end = 0;
 
-        // Single scan for all dots in the chunk
-        for dot_pos in memchr_iter(b'.', chunk) {
+        // Collect all dot positions first (single SIMD scan)
+        let dot_positions: Vec<usize> = memchr_iter(b'.', chunk).collect();
+
+        // Process each dot that has digit.digit pattern
+        for (i, &dot_pos) in dot_positions.iter().enumerate() {
             if dot_pos == 0 || dot_pos + 6 > chunk.len() {
                 continue;
             }
@@ -1093,17 +1096,7 @@ impl Extractor {
                 continue;
             }
 
-            // Count dots in window
-            let window_start = dot_pos.saturating_sub(3);
-            let window_end = (dot_pos + 12).min(chunk.len());
-            let window = &chunk[window_start..window_end];
-            let dot_count = memchr_iter(b'.', window).count();
-
-            if dot_count < 3 {
-                continue;
-            }
-
-            // Find start
+            // Find start by scanning backward for digits/dots
             let mut start = dot_pos;
             while start > 0 && (chunk[start - 1].is_ascii_digit() || chunk[start - 1] == b'.') {
                 start -= 1;
@@ -1113,7 +1106,19 @@ impl Extractor {
                 continue;
             }
 
-            // Try parse using existing helper
+            // Check if we have 3+ dots nearby (within reasonable IP range ~15 bytes)
+            // Count dots in the region [start, start+15]
+            let end_search = (start + 15).min(chunk.len());
+            let dots_in_range = dot_positions[i..]
+                .iter()
+                .take_while(|&&pos| pos < end_search)
+                .count();
+
+            if dots_in_range < 3 {
+                continue;
+            }
+
+            // Try parse using existing helper (which validates octets)
             if let Some((ip, end)) = self.try_parse_ipv4(chunk, start) {
                 matches.push(Match {
                     item: ExtractedItem::Ipv4(ip),
