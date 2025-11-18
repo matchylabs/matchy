@@ -81,82 +81,13 @@ impl ExtractorConfig {
 // Use library's LineBatch directly instead of maintaining duplicate WorkBatch
 pub use matchy::processing::LineBatch;
 
-/// Auto-tune thread count based on workload characteristics
-/// Optimized for large-scale workloads (thousands of files, multi-TB datasets)
-/// Returns (num_readers, num_workers)
-fn auto_tune_thread_count(inputs: &[PathBuf], show_stats: bool) -> (usize, usize) {
-    // Get available parallelism (physical cores or CPU quota)
-    let physical_cores = std::thread::available_parallelism()
+/// Auto-tune worker count based on available CPU cores
+/// Reader count is determined dynamically by the library based on workload simulation
+fn auto_tune_worker_count() -> usize {
+    std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        .max(1);
-
-    // Count regular files (exclude stdin)
-    let file_count = inputs.iter().filter(|p| p.to_str() != Some("-")).count();
-
-    // Count compressed files
-    let compressed_count = inputs
-        .iter()
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("gz") || e.eq_ignore_ascii_case("bz2"))
-                .unwrap_or(false)
-        })
-        .count();
-
-    // Strategy for large-scale workloads:
-    // - Many files: workers process whole files directly (minimal reader overhead)
-    // - Few files: readers chunk large files to keep workers busy
-    // - Runtime routing handles mixed file sizes dynamically
-
-    let (num_readers, num_workers) = if file_count > physical_cores * 2 {
-        // Many files scenario (common for large-scale workloads)
-        // Small files go directly to workers, only large files get chunked
-        // Minimal readers (1-2), maximize workers
-        let readers = if compressed_count > 0 { 2 } else { 1 };
-        let workers = physical_cores.saturating_sub(readers).max(1);
-        (readers, workers)
-    } else if file_count <= 1 {
-        // Single file: must chunk to keep workers busy
-        (1, physical_cores.saturating_sub(1).max(1))
-    } else {
-        // Few files (2 to 2*cores): chunk them to maximize parallelism
-        // For compressed files, workers handle decompression (CPU-intensive)
-        // so still prioritize workers over readers
-        let readers = if compressed_count > file_count / 2 {
-            2 // Compressed: 2 readers, rest workers
-        } else {
-            (physical_cores / 4).max(1).min(3) // Uncompressed: ~25% readers, capped at 3
-        };
-        let workers = physical_cores.saturating_sub(readers).max(1);
-        (readers, workers)
-    };
-
-    if show_stats {
-        eprintln!(
-            "[INFO] Auto-tuning: {} physical cores detected",
-            physical_cores
-        );
-        eprintln!(
-            "[INFO] Workload: {} files ({} compressed)",
-            file_count, compressed_count
-        );
-        eprintln!(
-            "[INFO] Configuration: {} reader(s), {} worker(s)",
-            num_readers, num_workers
-        );
-
-        if file_count > physical_cores * 2 {
-            eprintln!("[INFO] Strategy: Large-scale workload - workers process files directly");
-        } else if file_count <= 1 {
-            eprintln!("[INFO] Strategy: Single file - chunk to maximize parallelism");
-        } else {
-            eprintln!("[INFO] Strategy: Few files - chunk large files to keep workers busy");
-        }
-    }
-
-    (num_readers, num_workers)
+        .max(1)
 }
 
 /// Match result sent from workers to output thread
@@ -190,7 +121,7 @@ pub fn process_parallel(
     explicit_readers: Option<usize>,
     _batch_bytes: usize,
     output_format: &str,
-    show_stats: bool,
+    _show_stats: bool,
     _show_progress: bool,
     cache_size: usize,
     _overall_start: Instant,
@@ -201,49 +132,17 @@ pub fn process_parallel(
     usize,
     matchy::processing::RoutingStats,
 )> {
-    // Determine reader and worker counts
-    let (num_readers, num_workers) = if let Some(readers) = explicit_readers {
-        // Explicit reader count specified
-        let workers = if num_threads == 0 {
-            // Auto-detect total cores, subtract readers
-            let physical_cores = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .max(1);
-            physical_cores.saturating_sub(readers).max(1)
-        } else {
-            num_threads
-        };
-        (readers, workers)
-    } else if num_threads == 0 {
-        // Full auto-tune
-        auto_tune_thread_count(&inputs, show_stats)
+    // Determine worker count (readers determined dynamically by library)
+    let num_workers = if num_threads == 0 {
+        auto_tune_worker_count()
     } else {
-        // Explicit thread count only - use simplified auto-tune for readers
-        let file_count = inputs.iter().filter(|p| p.to_str() != Some("-")).count();
-
-        // Apply same strategy as full auto-tune, but with explicit total thread count
-        let readers = if file_count > num_threads * 2 {
-            // Many files: minimal readers
-            1
-        } else if file_count <= 1 {
-            // Single file: 1 reader
-            1
-        } else {
-            // Few files: allocate ~25% to readers, capped at 3
-            (num_threads / 4).max(1).min(3)
-        };
-        let workers = num_threads.saturating_sub(readers).max(1);
-
-        if show_stats {
-            eprintln!(
-                "[INFO] Configuration: {} reader(s), {} worker(s)",
-                readers, workers
-            );
-        }
-
-        (readers, workers)
+        num_threads
     };
+
+    // Reader count handling:
+    // - If --readers specified explicitly: pass it through to library
+    // - Otherwise: pass None, library will simulate routing and spawn exact number needed
+    let num_readers_opt = explicit_readers;
 
     let output_json = output_format == "json";
 
@@ -263,7 +162,7 @@ pub fn process_parallel(
 
     let result = matchy::processing::process_files_parallel(
         inputs,
-        Some(num_readers),
+        num_readers_opt, // Library will simulate routing if None
         Some(num_workers),
         move || {
             // Create database
@@ -327,7 +226,7 @@ pub fn process_parallel(
     aggregate.domain_count = result.worker_stats.domain_count;
     aggregate.email_count = result.worker_stats.email_count;
 
-    Ok((aggregate, num_workers, num_readers, result.routing_stats))
+    Ok((aggregate, result.actual_workers, result.actual_readers, result.routing_stats))
 }
 
 /// Message from worker to output thread

@@ -780,6 +780,10 @@ pub struct ParallelProcessingResult {
     pub routing_stats: RoutingStats,
     /// Aggregated worker statistics
     pub worker_stats: WorkerStats,
+    /// Actual number of reader threads spawned
+    pub actual_readers: usize,
+    /// Actual number of worker threads spawned
+    pub actual_workers: usize,
 }
 
 /// Collect metadata for all files upfront
@@ -893,6 +897,35 @@ fn decide_routing(
         || file_size > 1024 * 1024 * 1024 // > 1GB
 }
 
+/// Simulate routing algorithm to count how many files will be chunked
+///
+/// This allows us to spawn exactly the right number of reader threads (could be 0!)
+/// instead of guessing upfront.
+fn count_files_to_chunk(
+    file_infos: &[FileInfo],
+    workload_stats: &WorkloadStats,
+    num_workers: usize,
+) -> usize {
+    let file_count = file_infos.len();
+    let mut count = 0;
+
+    for (idx, file_info) in file_infos.iter().enumerate() {
+        if file_info.is_stdin {
+            count += 1; // stdin always chunks (unknown size)
+            continue;
+        }
+
+        let files_remaining = file_count - idx;
+
+        // Use same routing logic to predict outcome
+        if decide_routing(files_remaining, num_workers, file_info.size, workload_stats) {
+            count += 1;
+        }
+    }
+
+    count
+}
+
 /// Process multiple files in parallel using producer/reader/worker architecture
 ///
 /// This function uses a three-tier parallelism model:
@@ -958,8 +991,29 @@ where
     let num_cpus = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let num_readers = num_readers.unwrap_or(num_cpus / 2).max(1);
     let num_workers = num_workers.unwrap_or(num_cpus);
+
+    // Phase 1: Collect file metadata and compute workload statistics upfront
+    let file_infos = collect_file_metadata(&files)?;
+    let workload_stats = compute_workload_stats(&file_infos);
+    let file_count = file_infos.len();
+
+    // Phase 2: Simulate routing to determine optimal reader count
+    let files_to_chunk = count_files_to_chunk(&file_infos, &workload_stats, num_workers);
+
+    // Determine reader pool size based on actual chunking workload
+    let num_readers = num_readers.unwrap_or_else(|| {
+        if files_to_chunk == 0 {
+            0 // No readers needed - all files go direct to workers!
+        } else if files_to_chunk <= 3 {
+            1 // Few files to chunk, single reader handles easily
+        } else if files_to_chunk <= 10 {
+            2 // Moderate chunking workload
+        } else {
+            // Heavy chunking: allocate more readers, but cap at 1/3 of workers
+            (files_to_chunk / 10).max(2).min(num_workers / 3)
+        }
+    });
 
     // Two-queue architecture for dynamic work distribution:
     // 1. file_queue: Files that need chunking (readers pull from here)
@@ -979,29 +1033,30 @@ where
         std::collections::HashMap::<usize, WorkerStats>::new(),
     ));
 
-    // Spawn bounded reader thread pool
-    // Readers pull files from file_queue, chunk them, and push chunks to work_queue
+    // Spawn reader pool ONLY if files will be chunked (could be 0 readers!)
     let mut reader_handles = Vec::new();
-    for _reader_id in 0..num_readers {
-        let file_rx = Arc::clone(&file_receiver);
-        let work_tx = work_sender.clone();
+    if num_readers > 0 {
+        for _reader_id in 0..num_readers {
+            let file_rx = Arc::clone(&file_receiver);
+            let work_tx = work_sender.clone();
 
-        let handle = thread::spawn(move || {
-            // Pull files from queue and chunk them
-            loop {
-                let file_path = match file_rx.lock().unwrap().recv() {
-                    Ok(path) => path,
-                    Err(_) => break, // File queue closed
-                };
+            let handle = thread::spawn(move || {
+                // Pull files from queue and chunk them
+                loop {
+                    let file_path = match file_rx.lock().unwrap().recv() {
+                        Ok(path) => path,
+                        Err(_) => break, // File queue closed
+                    };
 
-                // Chunk this file and send chunks to work queue
-                if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
-                    eprintln!("Reader error: {}", e);
+                    // Chunk this file and send chunks to work queue
+                    if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
+                        eprintln!("Reader error: {}", e);
+                    }
                 }
-            }
-        });
+            });
 
-        reader_handles.push(handle);
+            reader_handles.push(handle);
+        }
     }
 
     // Spawn worker threads
@@ -1090,12 +1145,7 @@ where
         worker_handles.push(handle);
     }
 
-    // Phase 1: Collect file metadata and compute workload statistics upfront
-    let file_infos = collect_file_metadata(&files)?;
-    let workload_stats = compute_workload_stats(&file_infos);
-    let file_count = file_infos.len();
-
-    // Phase 2: Route files adaptively based on workload characteristics
+    // Phase 3: Route files adaptively based on workload characteristics
     let mut routing_stats = RoutingStats::default();
 
     for (idx, file_info) in file_infos.iter().enumerate() {
@@ -1186,6 +1236,8 @@ where
         matches: all_matches,
         routing_stats,
         worker_stats: aggregate_stats,
+        actual_readers: num_readers,
+        actual_workers: num_workers,
     })
 }
 
