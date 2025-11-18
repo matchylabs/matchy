@@ -50,8 +50,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-// File size thresholds for chunking decisions
-const SMALL_FILE: u64 = 100 * 1024 * 1024; // 100MB
+// File size thresholds for chunk size selection
 const LARGE_FILE: u64 = 1024 * 1024 * 1024; // 1GB
 const HUGE_FILE: u64 = 10 * 1024 * 1024 * 1024; // 10GB
 
@@ -731,6 +730,23 @@ fn reader_thread_chunker(file_path: PathBuf, work_sender: &Sender<WorkUnit>) -> 
     Ok(())
 }
 
+/// File metadata for routing decisions
+#[derive(Debug, Clone)]
+struct FileInfo {
+    path: PathBuf,
+    size: u64,
+    is_stdin: bool,
+}
+
+/// Workload statistics computed from file metadata
+#[derive(Debug, Clone)]
+struct WorkloadStats {
+    median_size: u64,
+    p95_size: u64,
+    #[allow(dead_code)] // Reserved for future stats reporting
+    total_bytes: u64,
+}
+
 /// Statistics about file routing decisions made by the main thread
 #[derive(Debug, Clone, Default)]
 pub struct RoutingStats {
@@ -764,6 +780,117 @@ pub struct ParallelProcessingResult {
     pub routing_stats: RoutingStats,
     /// Aggregated worker statistics
     pub worker_stats: WorkerStats,
+}
+
+/// Collect metadata for all files upfront
+fn collect_file_metadata(files: &[PathBuf]) -> Result<Vec<FileInfo>, String> {
+    let mut file_infos = Vec::with_capacity(files.len());
+
+    for path in files {
+        let is_stdin = path.to_str() == Some("-");
+        let size = if is_stdin {
+            0 // Unknown size for stdin
+        } else {
+            fs::metadata(path)
+                .map_err(|e| format!("Failed to stat {}: {}", path.display(), e))?
+                .len()
+        };
+
+        file_infos.push(FileInfo {
+            path: path.clone(),
+            size,
+            is_stdin,
+        });
+    }
+
+    Ok(file_infos)
+}
+
+/// Compute workload statistics from file metadata
+fn compute_workload_stats(file_infos: &[FileInfo]) -> WorkloadStats {
+    let mut sizes: Vec<u64> = file_infos
+        .iter()
+        .filter(|f| !f.is_stdin) // Exclude stdin from stats
+        .map(|f| f.size)
+        .collect();
+
+    if sizes.is_empty() {
+        return WorkloadStats {
+            median_size: 0,
+            p95_size: 0,
+            total_bytes: 0,
+        };
+    }
+
+    sizes.sort_unstable();
+
+    let median_size = sizes[sizes.len() / 2];
+    let p95_idx = (sizes.len() as f64 * 0.95) as usize;
+    let p95_size = sizes[p95_idx.min(sizes.len() - 1)];
+    let total_bytes: u64 = sizes.iter().sum();
+
+    WorkloadStats {
+        median_size,
+        p95_size,
+        total_bytes,
+    }
+}
+
+/// Adaptive routing decision: should this file be chunked by readers or sent directly to workers?
+///
+/// This is the core performance algorithm. The goal is to keep workers maximally busy.
+///
+/// Key principles:
+/// - Chunking has overhead (reader threads, coordination)
+/// - Chunking is only beneficial when we need to parallelize a file across multiple workers
+/// - This happens when workers would otherwise be idle (few files remaining)
+///
+/// # Arguments
+///
+/// * `files_remaining` - How many files are left to process (including this one)
+/// * `num_workers` - Number of worker threads available
+/// * `file_size` - Size of this file in bytes
+/// * `stats` - Workload statistics (median, P95 file sizes)
+///
+/// # Returns
+///
+/// `true` if file should be chunked, `false` if it should go directly to workers
+fn decide_routing(
+    files_remaining: usize,
+    num_workers: usize,
+    file_size: u64,
+    stats: &WorkloadStats,
+) -> bool {
+    // Scenario 1: Many files remaining (> 2x workers)
+    // Workers will stay continuously busy processing whole files
+    // Chunking adds overhead with no benefit
+    if files_remaining > num_workers * 2 {
+        return false; // Send direct to workers
+    }
+
+    // Scenario 2: Moderate files remaining (1-2x workers)
+    // Workers mostly busy, only chunk massive outliers
+    if files_remaining > num_workers {
+        // Is this file a massive outlier (10x median AND > 500MB)?
+        let is_huge_outlier = file_size > stats.median_size.saturating_mul(10)
+                           && file_size > 500 * 1024 * 1024;
+        return is_huge_outlier;
+    }
+
+    // Scenario 3: Few files remaining (< num_workers, but > 1)
+    // Some workers will be idle soon - chunk large files to parallelize
+    if files_remaining > 1 {
+        // Chunk if significantly larger than typical files
+        let is_large = file_size > stats.p95_size
+                    || file_size > stats.median_size.saturating_mul(5);
+        let is_worth_chunking = file_size >= 100 * 1024 * 1024; // > 100MB
+        return is_large && is_worth_chunking;
+    }
+
+    // Scenario 4: Last file
+    // All other workers idle - chunk if huge to parallelize across all workers
+    file_size > stats.median_size.saturating_mul(10)
+        || file_size > 1024 * 1024 * 1024 // > 1GB
 }
 
 /// Process multiple files in parallel using producer/reader/worker architecture
@@ -963,44 +1090,51 @@ where
         worker_handles.push(handle);
     }
 
-    // Main thread: analyze files and route to appropriate queue
+    // Phase 1: Collect file metadata and compute workload statistics upfront
+    let file_infos = collect_file_metadata(&files)?;
+    let workload_stats = compute_workload_stats(&file_infos);
+    let file_count = file_infos.len();
+
+    // Phase 2: Route files adaptively based on workload characteristics
     let mut routing_stats = RoutingStats::default();
 
-    for file_path in files {
-        // Special handling for stdin
-        let is_stdin = file_path.to_str() == Some("-");
+    for (idx, file_info) in file_infos.iter().enumerate() {
+        let files_remaining = file_count - idx;
 
-        if is_stdin {
-            // Always route stdin to file queue for chunking (can't stat it)
+        if file_info.is_stdin {
+            // Always route stdin to file queue for chunking (can't stat it, unknown size)
             routing_stats.files_to_readers += 1;
             routing_stats.bytes_to_readers += 0; // Size unknown
 
             file_sender
-                .send(file_path)
+                .send(file_info.path.clone())
                 .map_err(|_| "File queue closed unexpectedly")?;
         } else {
-            // Regular file - get size and decide routing
-            let file_size = fs::metadata(&file_path)
-                .map_err(|e| format!("Failed to stat {}: {}", file_path.display(), e))?
-                .len();
+            // Apply adaptive routing decision
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                file_info.size,
+                &workload_stats,
+            );
 
-            // Routing decision: small files go directly to workers, large files to readers for chunking
-            // This is simple and works well for large-scale workloads with mixed file sizes
-            if file_size >= SMALL_FILE {
-                // Large file: send to file queue for chunking
+            if should_chunk {
+                // Route to reader pool for chunking
                 routing_stats.files_to_readers += 1;
-                routing_stats.bytes_to_readers += file_size;
+                routing_stats.bytes_to_readers += file_info.size;
 
                 file_sender
-                    .send(file_path)
+                    .send(file_info.path.clone())
                     .map_err(|_| "File queue closed unexpectedly")?;
             } else {
-                // Small file: send directly to work queue as whole file
+                // Route directly to workers as whole file
                 routing_stats.files_to_workers += 1;
-                routing_stats.bytes_to_workers += file_size;
+                routing_stats.bytes_to_workers += file_info.size;
 
                 work_sender
-                    .send(WorkUnit::WholeFile { path: file_path })
+                    .send(WorkUnit::WholeFile {
+                        path: file_info.path.clone(),
+                    })
                     .map_err(|_| "Work queue closed unexpectedly")?;
             }
         }
