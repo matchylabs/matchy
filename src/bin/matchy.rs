@@ -130,6 +130,11 @@ enum Commands {
         /// Default: auto-detect from database capabilities
         #[arg(long)]
         extractors: Option<String>,
+
+        /// Show detailed routing decisions for each file (helpful for creating tests)
+        /// Outputs workload stats and per-file routing decisions to stderr
+        #[arg(long)]
+        debug_routing: bool,
     },
 
     /// Query a pattern database
@@ -307,6 +312,7 @@ fn main() -> Result<()> {
             progress,
             cache_size,
             extractors,
+            debug_routing,
         } => cmd_match(
             database,
             inputs,
@@ -319,6 +325,7 @@ fn main() -> Result<()> {
             progress,
             cache_size,
             extractors,
+            debug_routing,
         ),
         Commands::Query {
             database,

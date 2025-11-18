@@ -881,9 +881,9 @@ fn decide_routing(
         return is_huge_outlier;
     }
 
-    // Scenario 3: Few files remaining (< num_workers, but > 1)
+    // Scenario 3: Few files remaining (< num_workers, but > 3)
     // Some workers will be idle soon - chunk large files to parallelize
-    if files_remaining > 1 {
+    if files_remaining > 3 {
         // Chunk if significantly larger than typical files
         let is_large = file_size > stats.p95_size
                     || file_size > stats.median_size.saturating_mul(5);
@@ -891,10 +891,20 @@ fn decide_routing(
         return is_large && is_worth_chunking;
     }
 
-    // Scenario 4: Last file
-    // All other workers idle - chunk if huge to parallelize across all workers
-    file_size > stats.median_size.saturating_mul(10)
-        || file_size > 1024 * 1024 * 1024 // > 1GB
+    // Scenario 4: Last few files (1-3 remaining)
+    // Most/all workers finishing up - aggressive chunking to avoid stragglers
+    // Chunk if EITHER:
+    // - File is significantly larger than median (2x+) AND worth parallelizing (> 300MB)
+    //   This catches stragglers like 600MB file after 15x 200MB files
+    // - File is huge (> 1GB) AND median is small (< 1GB)
+    //   This handles single-file scenarios or where most files are small
+    //   but avoids chunking uniform huge-file workloads (1000x 5GB files)
+    let is_straggler = file_size > stats.median_size.saturating_mul(2)
+                    && file_size > 300 * 1024 * 1024;
+    let is_huge_with_small_median = file_size > 1024 * 1024 * 1024 // > 1GB
+                                  && stats.median_size < 1024 * 1024 * 1024; // median < 1GB
+
+    is_straggler || is_huge_with_small_median
 }
 
 /// Simulate routing algorithm to count how many files will be chunked
@@ -1322,26 +1332,296 @@ mod tests {
     }
 
     #[test]
-    fn test_chunking_decision_logic() {
-        // Test the chunking decision logic
-        let num_workers = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(8);
+    fn test_routing_scenario_many_huge_files() {
+        // Real-world scenario: 1000 huge compressed files
+        // Expected: All files go direct to workers, 0 readers spawned
+        let num_workers = 8;
+        let stats = WorkloadStats {
+            median_size: 5 * 1024 * 1024 * 1024, // 5GB median
+            p95_size: 8 * 1024 * 1024 * 1024,    // 8GB P95
+            total_bytes: 5000 * 1024 * 1024 * 1024, // 5TB total
+        };
 
-        // Simulate scenario: 3 files, each 150MB, with 8+ workers
-        // remaining_files < num_workers && file_size >= SMALL_FILE
-        // should result in chunking
+        // First 950 files: plenty remaining, don't chunk
+        for i in 0..950 {
+            let files_remaining = 1000 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                5 * 1024 * 1024 * 1024, // 5GB files
+                &stats,
+            );
+            assert!(
+                !should_chunk,
+                "File {} (remaining={}) should NOT chunk with many files",
+                i, files_remaining
+            );
+        }
 
-        let should_chunk_few_large = 3 < num_workers && 150 * 1024 * 1024 >= SMALL_FILE;
-        let should_not_chunk_many_large = 20 >= num_workers; // 20 files >= 8 workers
+        // Files 951-997: moderate remaining, still don't chunk normal-sized files
+        for i in 950..997 {
+            let files_remaining = 1000 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                5 * 1024 * 1024 * 1024, // 5GB (not an outlier)
+                &stats,
+            );
+            assert!(
+                !should_chunk,
+                "File {} (remaining={}) should NOT chunk (not an outlier)",
+                i, files_remaining
+            );
+        }
 
-        // With 3 files and 8 workers, should chunk
-        assert!(should_chunk_few_large, "Few large files should be chunked");
+        // Last 3 files: only chunk if > 2x median = 10GB
+        for i in 997..1000 {
+            let files_remaining = 1000 - i;
+            let should_chunk_normal = decide_routing(
+                files_remaining,
+                num_workers,
+                5 * 1024 * 1024 * 1024, // 5GB = 1x median
+                &stats,
+            );
+            let should_chunk_large = decide_routing(
+                files_remaining,
+                num_workers,
+                12 * 1024 * 1024 * 1024, // 12GB = 2.4x median
+                &stats,
+            );
+            assert!(
+                !should_chunk_normal,
+                "File {} (remaining={}, 5GB) should NOT chunk (< 2x median)",
+                i, files_remaining
+            );
+            assert!(
+                should_chunk_large,
+                "File {} (remaining={}, 12GB) SHOULD chunk (> 2x median)",
+                i, files_remaining
+            );
+        }
+    }
 
-        // With 20 files and 8 workers, should NOT chunk (plenty of files)
+    #[test]
+    fn test_routing_scenario_journal_logs_with_tarball() {
+        // Real-world scenario from user:
+        // 15 files @ 200MB each (uncompressed journal logs)
+        // 1 file @ 600MB (compressed tarball)
+        // Expected: First 15 direct to workers, last file (600MB) should chunk
+        let num_workers = 8;
+        let stats = WorkloadStats {
+            median_size: 209715200,  // ~200MB
+            p95_size: 209715200,     // ~200MB (uniform size)
+            total_bytes: 3766210481, // ~3.5GB total
+        };
+
+        // Files 0-14: 200MB each, plenty remaining
+        for i in 0..15 {
+            let files_remaining = 16 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                209715200, // 200MB
+                &stats,
+            );
+            assert!(
+                !should_chunk,
+                "File {} (remaining={}) should NOT chunk (many files)",
+                i, files_remaining
+            );
+        }
+
+        // File 15 (last): 600MB compressed tarball
+        // files_remaining = 1
+        // file_size (600MB) > median (200MB) * 2 ✓
+        // Should chunk to avoid straggler!
+        let should_chunk_tarball = decide_routing(
+            1,           // Last file
+            num_workers,
+            616354689,   // ~600MB
+            &stats,
+        );
         assert!(
-            should_not_chunk_many_large,
-            "Many files should not be chunked even if large"
+            should_chunk_tarball,
+            "Last file (600MB, 3x median) SHOULD chunk to avoid straggler"
+        );
+    }
+
+    #[test]
+    fn test_routing_scenario_five_large_files_with_outlier() {
+        // Scenario: 5 large files, last one is massive outlier
+        // Files 1-4: ~120MB
+        // File 5: 1.3GB outlier
+        let num_workers = 16;
+        let stats = WorkloadStats {
+            median_size: 120 * 1024 * 1024,  // 120MB
+            p95_size: 130 * 1024 * 1024,     // 130MB
+            total_bytes: 1800 * 1024 * 1024, // ~1.8GB total
+        };
+
+        // Files 0-3: normal size, few files remaining but not in straggler zone yet
+        for i in 0..4 {
+            let files_remaining = 5 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                120 * 1024 * 1024, // 120MB
+                &stats,
+            );
+            // files_remaining = 5,4 (> 3) → use Scenario 3 rules
+            // 120MB < P95 (130MB) and 120MB < 5x median (600MB)
+            // Should NOT chunk
+            assert!(
+                !should_chunk,
+                "File {} (remaining={}, 120MB) should NOT chunk",
+                i, files_remaining
+            );
+        }
+
+        // File 4 (last): 1.3GB outlier
+        // files_remaining = 1
+        // 1.3GB > 2x median (240MB) ✓ AND > 300MB ✓
+        // Should chunk!
+        let should_chunk_outlier = decide_routing(
+            1,
+            num_workers,
+            1346 * 1024 * 1024, // 1.3GB
+            &stats,
+        );
+        assert!(
+            should_chunk_outlier,
+            "Last file (1.3GB outlier) SHOULD chunk (> 2x median)"
+        );
+    }
+
+    #[test]
+    fn test_routing_scenario_single_massive_file() {
+        // Scenario: Single 100GB file where median = file size
+        // Current limitation: algorithm doesn't chunk uniform single-file workloads
+        // This is acceptable because:
+        // 1. Single file workloads are rare in practice
+        // 2. User can use --readers=1 to force chunking if needed
+        // 3. The file still gets processed (just not parallelized)
+        let num_workers = 16;
+        let stats = WorkloadStats {
+            median_size: 100 * 1024 * 1024 * 1024, // 100GB (only file)
+            p95_size: 100 * 1024 * 1024 * 1024,
+            total_bytes: 100 * 1024 * 1024 * 1024,
+        };
+
+        let should_chunk = decide_routing(
+            1,
+            num_workers,
+            100 * 1024 * 1024 * 1024, // 100GB
+            &stats,
+        );
+
+        // Current behavior: does NOT chunk (median = file size, not larger)
+        // This is acceptable - user can override with --readers if needed
+        assert!(
+            !should_chunk,
+            "Single file where median=size doesn't chunk (use --readers to override)"
+        );
+    }
+
+    #[test]
+    fn test_routing_scenario_many_small_files() {
+        // Scenario: 10000 small files (1MB each)
+        // Expected: All direct to workers, never chunk
+        let num_workers = 16;
+        let stats = WorkloadStats {
+            median_size: 1024 * 1024,      // 1MB
+            p95_size: 1024 * 1024,         // 1MB
+            total_bytes: 10000 * 1024 * 1024, // 10GB total
+        };
+
+        // All files: many remaining, small size
+        for i in 0..10000 {
+            let files_remaining = 10000 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                1024 * 1024, // 1MB
+                &stats,
+            );
+            assert!(
+                !should_chunk,
+                "File {} should NOT chunk (many small files)",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_routing_scenario_moderate_outlier_in_middle() {
+        // Scenario: 50 files @ 100MB, one 5GB outlier at position 25
+        // Expected: First 33+ files direct, outlier chunks (if in moderate zone)
+        let num_workers = 8;
+        let stats = WorkloadStats {
+            median_size: 100 * 1024 * 1024,  // 100MB
+            p95_size: 100 * 1024 * 1024,
+            total_bytes: 5000 * 1024 * 1024, // ~5GB total
+        };
+
+        // File 0-32: many remaining (50-18 = 32 > 2*8 = 16)
+        for i in 0..33 {
+            let files_remaining = 50 - i;
+            let should_chunk = decide_routing(
+                files_remaining,
+                num_workers,
+                100 * 1024 * 1024, // 100MB
+                &stats,
+            );
+            assert!(
+                !should_chunk,
+                "File {} (remaining={}) should NOT chunk (many remaining)",
+                i, files_remaining
+            );
+        }
+
+        // File 25: 5GB outlier, files_remaining = 25
+        // 25 > 2*num_workers (16) → Scenario 1 (many files)
+        // Scenario 1: always send direct to workers (no chunking)
+        // Even though it's a massive outlier, there are still many files remaining
+        let should_chunk_outlier = decide_routing(
+            25,
+            num_workers,
+            5 * 1024 * 1024 * 1024, // 5GB
+            &stats,
+        );
+        assert!(
+            !should_chunk_outlier,
+            "Outlier with many files remaining (25 > 16) should NOT chunk (Scenario 1)"
+        );
+    }
+
+    #[test]
+    fn test_routing_count_files_to_chunk() {
+        // Test the simulation function
+        let num_workers = 8;
+
+        // Scenario: 50 uniform files + 1 outlier at end
+        let mut file_infos = Vec::new();
+        for _ in 0..50 {
+            file_infos.push(FileInfo {
+                path: PathBuf::from("file.log"),
+                size: 200 * 1024 * 1024, // 200MB
+                is_stdin: false,
+            });
+        }
+        file_infos.push(FileInfo {
+            path: PathBuf::from("huge.tar.gz"),
+            size: 2 * 1024 * 1024 * 1024, // 2GB outlier
+            is_stdin: false,
+        });
+
+        let workload_stats = compute_workload_stats(&file_infos);
+        let files_to_chunk = count_files_to_chunk(&file_infos, &workload_stats, num_workers);
+
+        // Should chunk only the last file (outlier)
+        assert_eq!(
+            files_to_chunk, 1,
+            "Should chunk exactly 1 file (the outlier)"
         );
     }
 }

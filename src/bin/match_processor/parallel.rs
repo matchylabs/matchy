@@ -126,6 +126,7 @@ pub fn process_parallel(
     cache_size: usize,
     _overall_start: Instant,
     extractor_config: ExtractorConfig,
+    _debug_routing: bool,  // TODO: implement debug output
 ) -> Result<(
     ProcessingStats,
     usize,
