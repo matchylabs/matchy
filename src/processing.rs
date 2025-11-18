@@ -44,7 +44,7 @@
 use crate::extractor::{ExtractedItem, Extractor, HashType};
 use crate::{Database, QueryResult};
 use std::fs;
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -747,6 +747,13 @@ struct WorkloadStats {
     total_bytes: u64,
 }
 
+/// Individual file routing decision (for test export)
+#[derive(Debug, Clone)]
+struct RoutingDecision {
+    size: u64,
+    routed_to_reader: bool,
+}
+
 /// Statistics about file routing decisions made by the main thread
 #[derive(Debug, Clone, Default)]
 pub struct RoutingStats {
@@ -907,6 +914,111 @@ fn decide_routing(
     is_straggler || is_huge_with_small_median
 }
 
+/// Export routing analysis as a Rust test file
+///
+/// Generates a complete test that can be added to the test suite, containing:
+/// - File sizes from the actual workload
+/// - Workload statistics (median, P95)
+/// - Number of workers
+/// - Expected routing decisions for each file
+fn export_routing_test(
+    test_path: &Path,
+    routing_decisions: &[RoutingDecision],
+    workload_stats: &WorkloadStats,
+    num_workers: usize,
+) -> Result<(), String> {
+    let mut file = fs::File::create(test_path)
+        .map_err(|e| format!("Failed to create test file: {}", e))?;
+
+    // Generate test name from timestamp
+    let test_name = format!(
+        "test_routing_exported_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+
+    // Write test header
+    writeln!(file, "// Auto-generated routing test case")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "// Generated from real workload - timestamp: {}", test_name.replace("test_routing_exported_", ""))
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "//")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "// Copy this test into src/processing.rs in the #[cfg(test)] mod tests section")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "")
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    // Write test function
+    writeln!(file, "#[test]")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "fn {}() {{", test_name)
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    // Write workload stats
+    writeln!(file, "    let num_workers = {};", num_workers)
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "    let stats = WorkloadStats {{")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "        median_size: {},", workload_stats.median_size)
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "        p95_size: {},", workload_stats.p95_size)
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "        total_bytes: {},", workload_stats.total_bytes)
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "    }};")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "")
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    // Write file sizes
+    writeln!(file, "    let file_sizes = vec![")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    for decision in routing_decisions {
+        let mb = decision.size as f64 / (1024.0 * 1024.0);
+        writeln!(file, "        {}, // {:.2} MB", decision.size, mb)
+            .map_err(|e| format!("Write failed: {}", e))?;
+    }
+    writeln!(file, "    ];")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "")
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    // Write test assertions
+    writeln!(file, "    // Test routing decisions for each file")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "    for (idx, &size) in file_sizes.iter().enumerate() {{")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "        let files_remaining = file_sizes.len() - idx;")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "        let should_chunk = decide_routing(files_remaining, num_workers, size, &stats);")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "")
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    // Write expected results
+    for (idx, decision) in routing_decisions.iter().enumerate() {
+        let expected = decision.routed_to_reader;
+        let mb = decision.size as f64 / (1024.0 * 1024.0);
+        writeln!(file, "        if idx == {} {{ // {:.2} MB", idx, mb)
+            .map_err(|e| format!("Write failed: {}", e))?;
+        writeln!(file, "            assert_eq!(should_chunk, {}, \"File {} routing mismatch\");",
+            expected, idx)
+            .map_err(|e| format!("Write failed: {}", e))?;
+        writeln!(file, "        }}")
+            .map_err(|e| format!("Write failed: {}", e))?;
+    }
+
+    writeln!(file, "    }}")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "}}")
+        .map_err(|e| format!("Write failed: {}", e))?;
+
+    Ok(())
+}
+
 /// Simulate routing algorithm to count how many files will be chunked
 ///
 /// This allows us to spawn exactly the right number of reader threads (could be 0!)
@@ -994,6 +1106,7 @@ pub fn process_files_parallel<F, P>(
     create_worker: F,
     progress_callback: Option<P>,
     debug_routing: bool,
+    export_test: Option<PathBuf>,
 ) -> Result<ParallelProcessingResult, String>
 where
     F: Fn() -> Result<Worker, String> + Sync + Send + 'static,
@@ -1178,6 +1291,9 @@ where
     // Phase 3: Route files adaptively based on workload characteristics
     let mut routing_stats = RoutingStats::default();
 
+    // Track routing decisions for test export
+    let mut routing_decisions = Vec::new();
+
     if debug_routing {
         eprintln!("[DEBUG] === Per-File Routing Decisions ===");
     }
@@ -1189,6 +1305,10 @@ where
             // Always route stdin to file queue for chunking (can't stat it, unknown size)
             routing_stats.files_to_readers += 1;
             routing_stats.bytes_to_readers += 0; // Size unknown
+            routing_decisions.push(RoutingDecision {
+                size: 0,
+                routed_to_reader: true,
+            });
 
             if debug_routing {
                 eprintln!("[DEBUG] File {}: {} (stdin) → READER (unknown size, always chunk)",
@@ -1222,6 +1342,10 @@ where
                 // Route to reader pool for chunking
                 routing_stats.files_to_readers += 1;
                 routing_stats.bytes_to_readers += file_info.size;
+                routing_decisions.push(RoutingDecision {
+                    size: file_info.size,
+                    routed_to_reader: true,
+                });
 
                 if debug_routing {
                     let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
@@ -1237,6 +1361,10 @@ where
                 // Route directly to workers as whole file
                 routing_stats.files_to_workers += 1;
                 routing_stats.bytes_to_workers += file_info.size;
+                routing_decisions.push(RoutingDecision {
+                    size: file_info.size,
+                    routed_to_reader: false,
+                });
 
                 if debug_routing {
                     let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
@@ -1260,6 +1388,20 @@ where
         eprintln!("[DEBUG] Files to workers: {}", routing_stats.files_to_workers);
         eprintln!("[DEBUG] Files to readers: {}", routing_stats.files_to_readers);
         eprintln!();
+    }
+
+    // Export test file if requested
+    if let Some(test_path) = export_test {
+        if let Err(e) = export_routing_test(
+            &test_path,
+            &routing_decisions,
+            &workload_stats,
+            num_workers,
+        ) {
+            eprintln!("[WARN] Failed to export test file: {}", e);
+        } else {
+            eprintln!("[INFO] Exported test case to: {}", test_path.display());
+        }
     }
 
     // Close file queue - readers will finish their current files and exit

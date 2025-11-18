@@ -135,6 +135,11 @@ enum Commands {
         /// Outputs workload stats and per-file routing decisions to stderr
         #[arg(long)]
         debug_routing: bool,
+
+        /// Export routing analysis as a Rust test file that can be added to the test suite
+        /// The file will contain a complete test with file sizes, workload stats, and expected routing
+        #[arg(long)]
+        export_test: Option<PathBuf>,
     },
 
     /// Query a pattern database
@@ -313,6 +318,7 @@ fn main() -> Result<()> {
             cache_size,
             extractors,
             debug_routing,
+            export_test,
         } => cmd_match(
             database,
             inputs,
@@ -326,6 +332,7 @@ fn main() -> Result<()> {
             cache_size,
             extractors,
             debug_routing,
+            export_test,
         ),
         Commands::Query {
             database,
