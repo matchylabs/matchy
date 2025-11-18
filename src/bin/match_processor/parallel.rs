@@ -126,7 +126,7 @@ pub fn process_parallel(
     cache_size: usize,
     _overall_start: Instant,
     extractor_config: ExtractorConfig,
-    _debug_routing: bool,  // TODO: implement debug output
+    debug_routing: bool,
 ) -> Result<(
     ProcessingStats,
     usize,
@@ -196,6 +196,7 @@ pub fn process_parallel(
                 }
             }
         }),
+        debug_routing, // Pass debug flag to library
     )
     .map_err(|e| anyhow::anyhow!("Parallel processing failed: {}", e))?;
 

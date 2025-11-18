@@ -993,6 +993,7 @@ pub fn process_files_parallel<F, P>(
     num_workers: Option<usize>,
     create_worker: F,
     progress_callback: Option<P>,
+    debug_routing: bool,
 ) -> Result<ParallelProcessingResult, String>
 where
     F: Fn() -> Result<Worker, String> + Sync + Send + 'static,
@@ -1010,6 +1011,25 @@ where
 
     // Phase 2: Simulate routing to determine optimal reader count
     let files_to_chunk = count_files_to_chunk(&file_infos, &workload_stats, num_workers);
+
+    // Debug output: show workload analysis
+    if debug_routing {
+        eprintln!("\n[DEBUG] === Routing Analysis ===");
+        eprintln!("[DEBUG] Workload statistics:");
+        eprintln!("[DEBUG]   Total files: {}", file_count);
+        eprintln!("[DEBUG]   Median size: {} bytes ({:.2} MB)",
+            workload_stats.median_size,
+            workload_stats.median_size as f64 / (1024.0 * 1024.0));
+        eprintln!("[DEBUG]   P95 size: {} bytes ({:.2} MB)",
+            workload_stats.p95_size,
+            workload_stats.p95_size as f64 / (1024.0 * 1024.0));
+        eprintln!("[DEBUG]   Total bytes: {} ({:.2} GB)",
+            workload_stats.total_bytes,
+            workload_stats.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0));
+        eprintln!("[DEBUG]   Workers: {}", num_workers);
+        eprintln!("[DEBUG]   Predicted files to chunk: {}", files_to_chunk);
+        eprintln!();
+    }
 
     // Determine reader pool size based on actual chunking workload
     let num_readers = num_readers.unwrap_or_else(|| {
@@ -1158,6 +1178,10 @@ where
     // Phase 3: Route files adaptively based on workload characteristics
     let mut routing_stats = RoutingStats::default();
 
+    if debug_routing {
+        eprintln!("[DEBUG] === Per-File Routing Decisions ===");
+    }
+
     for (idx, file_info) in file_infos.iter().enumerate() {
         let files_remaining = file_count - idx;
 
@@ -1165,6 +1189,11 @@ where
             // Always route stdin to file queue for chunking (can't stat it, unknown size)
             routing_stats.files_to_readers += 1;
             routing_stats.bytes_to_readers += 0; // Size unknown
+
+            if debug_routing {
+                eprintln!("[DEBUG] File {}: {} (stdin) → READER (unknown size, always chunk)",
+                    idx, file_info.path.display());
+            }
 
             file_sender
                 .send(file_info.path.clone())
@@ -1178,10 +1207,28 @@ where
                 &workload_stats,
             );
 
+            // Determine which scenario applied for debug output
+            let scenario = if files_remaining > num_workers * 2 {
+                "Scenario 1: many files"
+            } else if files_remaining > num_workers {
+                "Scenario 2: moderate files"
+            } else if files_remaining > 3 {
+                "Scenario 3: few files"
+            } else {
+                "Scenario 4: last few files (straggler detection)"
+            };
+
             if should_chunk {
                 // Route to reader pool for chunking
                 routing_stats.files_to_readers += 1;
                 routing_stats.bytes_to_readers += file_info.size;
+
+                if debug_routing {
+                    let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
+                    let vs_median = file_info.size as f64 / workload_stats.median_size.max(1) as f64;
+                    eprintln!("[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → READER ({})",
+                        idx, file_info.path.display(), size_mb, vs_median, scenario);
+                }
 
                 file_sender
                     .send(file_info.path.clone())
@@ -1191,6 +1238,13 @@ where
                 routing_stats.files_to_workers += 1;
                 routing_stats.bytes_to_workers += file_info.size;
 
+                if debug_routing {
+                    let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
+                    let vs_median = file_info.size as f64 / workload_stats.median_size.max(1) as f64;
+                    eprintln!("[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → WORKER ({})",
+                        idx, file_info.path.display(), size_mb, vs_median, scenario);
+                }
+
                 work_sender
                     .send(WorkUnit::WholeFile {
                         path: file_info.path.clone(),
@@ -1198,6 +1252,14 @@ where
                     .map_err(|_| "Work queue closed unexpectedly")?;
             }
         }
+    }
+
+    if debug_routing {
+        eprintln!("\n[DEBUG] === Routing Summary ===");
+        eprintln!("[DEBUG] Readers spawned: {}", num_readers);
+        eprintln!("[DEBUG] Files to workers: {}", routing_stats.files_to_workers);
+        eprintln!("[DEBUG] Files to readers: {}", routing_stats.files_to_readers);
+        eprintln!();
     }
 
     // Close file queue - readers will finish their current files and exit
