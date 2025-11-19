@@ -20,6 +20,40 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use zerocopy::Ref;
 
+/// Prefetch memory into cache (cross-platform)
+///
+/// This is a hint to the CPU to load data into cache before it's needed.
+/// Prefetching hides memory latency by loading data speculatively.
+///
+/// # Safety
+///
+/// The pointer must be valid (but doesn't need to be aligned or initialized).
+/// Prefetch is always safe - it's just a hint that can be ignored.
+#[inline(always)]
+fn prefetch_read(ptr: *const u8) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::x86_64::_mm_prefetch(ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+    }
+    
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        // ARM64 PRFM instruction: Prefetch for Load, Keep in L1 cache
+        // PRFM PLDL1KEEP, [x0] - Prefetch for load into L1, temporal locality
+        core::arch::asm!(
+            "prfm pldl1keep, [{0}]",
+            in(reg) ptr,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        // No-op on other architectures
+        let _ = ptr;
+    }
+}
+
 /// Matching mode for the automaton
 ///
 /// # Case-Insensitive Implementation
@@ -892,6 +926,14 @@ impl ACAutomaton {
         let (node_ref, _) = Ref::<_, ACNodeHot>::from_prefix(node_slice).ok()?;
         let node = *node_ref;
 
+        // OPTIMIZATION: Prefetch failure link node speculatively
+        // Failure links are followed frequently on mismatches, but unpredictably.
+        // Prefetching hides the 40-200+ cycle memory latency.
+        // This is free - if we don't need it, the prefetch is just ignored.
+        if node.failure_offset != 0 && node.failure_offset < self.buffer.len() as u32 {
+            prefetch_read(unsafe { self.buffer.as_ptr().add(node.failure_offset as usize) });
+        }
+
         // Dispatch on state encoding
         let kind = StateKind::from_u8(node.state_kind)?;
 
@@ -905,7 +947,14 @@ impl ACAutomaton {
                 // HOT PATH: Single inline comparison, no indirection!
                 // This eliminates a cache miss for 75-80% of transitions
                 if node.one_char == ch {
-                    Some(node.edges_offset as usize) // edges_offset stores target for ONE
+                    let target_offset = node.edges_offset as usize;
+                    
+                    // OPTIMIZATION: Prefetch target node - we'll need it next
+                    if target_offset < self.buffer.len() {
+                        prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
+                    }
+                    
+                    Some(target_offset)
                 } else {
                     None
                 }
@@ -943,7 +992,14 @@ impl ACAutomaton {
                     let edge_offset = edges_offset + idx * edge_size;
                     let edge_slice = &self.buffer[edge_offset..];
                     let (edge_ref, _) = Ref::<_, ACEdge>::from_prefix(edge_slice).ok()?;
-                    return Some(edge_ref.target_offset as usize);
+                    let target_offset = edge_ref.target_offset as usize;
+                    
+                    // OPTIMIZATION: Prefetch target node - we'll need it next
+                    if target_offset < self.buffer.len() {
+                        prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
+                    }
+                    
+                    return Some(target_offset);
                 }
 
                 None
@@ -968,7 +1024,14 @@ impl ACAutomaton {
                 ]);
 
                 if target != 0 {
-                    Some(target as usize)
+                    let target_offset = target as usize;
+                    
+                    // OPTIMIZATION: Prefetch target node - we'll need it next
+                    if target_offset < self.buffer.len() {
+                        prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
+                    }
+                    
+                    Some(target_offset)
                 } else {
                     None
                 }
