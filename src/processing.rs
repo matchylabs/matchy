@@ -986,6 +986,7 @@ fn compute_workload_stats(file_infos: &[FileInfo]) -> WorkloadStats {
 /// * `files_remaining` - How many files are left to process (including this one)
 /// * `num_workers` - Number of worker threads available
 /// * `file_size` - Size of this file in bytes
+/// * `is_compressed` - Whether the file is compressed (affects routing due to decompression overhead)
 /// * `stats` - Workload statistics (median, P95 file sizes)
 ///
 /// # Returns
@@ -995,18 +996,28 @@ fn decide_routing(
     files_remaining: usize,
     num_workers: usize,
     file_size: u64,
+    is_compressed: bool,
     stats: &WorkloadStats,
 ) -> bool {
     // Scenario 1: Many files remaining (> 2x workers)
     // Workers will stay continuously busy processing whole files
     // Chunking adds overhead with no benefit
+    // Exception: Large compressed files benefit from parallel decompression in readers
     if files_remaining > num_workers * 2 {
+        // Large compressed files (>200MB) benefit from reader decompression even with many files
+        if is_compressed && file_size > 200 * 1024 * 1024 {
+            return true;
+        }
         return false; // Send direct to workers
     }
 
     // Scenario 2: Moderate files remaining (1-2x workers)
-    // Workers mostly busy, only chunk massive outliers
+    // Workers mostly busy, only chunk massive outliers or large compressed files
     if files_remaining > num_workers {
+        // Compressed files >100MB benefit from reader decompression
+        if is_compressed && file_size > 100 * 1024 * 1024 {
+            return true;
+        }
         // Is this file a massive outlier (10x median AND > 500MB)?
         let is_huge_outlier = file_size > stats.median_size.saturating_mul(10)
                            && file_size > 500 * 1024 * 1024;
@@ -1016,6 +1027,10 @@ fn decide_routing(
     // Scenario 3: Few files remaining (< num_workers, but > 3)
     // Some workers will be idle soon - chunk large files to parallelize
     if files_remaining > 3 {
+        // Compressed files >50MB go through readers for decompression
+        if is_compressed && file_size > 50 * 1024 * 1024 {
+            return true;
+        }
         // Chunk if significantly larger than typical files
         let is_large = file_size > stats.p95_size
                     || file_size > stats.median_size.saturating_mul(5);
@@ -1025,6 +1040,10 @@ fn decide_routing(
 
     // Scenario 4: Last few files (1-3 remaining)
     // Most/all workers finishing up - aggressive chunking to avoid stragglers
+    // Compressed files >50MB always go through readers for parallel decompression
+    if is_compressed && file_size > 50 * 1024 * 1024 {
+        return true;
+    }
     // Chunk if EITHER:
     // - File is significantly larger than median (2x+) AND worth parallelizing (> 300MB)
     //   This catches stragglers like 600MB file after 15x 200MB files
@@ -1122,7 +1141,7 @@ fn export_routing_test(
         .map_err(|e| format!("Write failed: {}", e))?;
     writeln!(file, "        let files_remaining = file_metadata.len() - idx;")
         .map_err(|e| format!("Write failed: {}", e))?;
-    writeln!(file, "        let should_chunk = decide_routing(files_remaining, num_workers, size, &stats);")
+    writeln!(file, "        let should_chunk = decide_routing(files_remaining, num_workers, size, is_compressed, &stats);")
         .map_err(|e| format!("Write failed: {}", e))?;
     writeln!(file, "")
         .map_err(|e| format!("Write failed: {}", e))?;
@@ -1170,7 +1189,13 @@ fn count_files_to_chunk(
         let files_remaining = file_count - idx;
 
         // Use same routing logic to predict outcome
-        if decide_routing(files_remaining, num_workers, file_info.size, workload_stats) {
+        if decide_routing(
+            files_remaining,
+            num_workers,
+            file_info.size,
+            file_info.is_compressed,
+            workload_stats,
+        ) {
             count += 1;
         }
     }
@@ -1455,6 +1480,7 @@ where
                 files_remaining,
                 num_workers,
                 file_info.size,
+                file_info.is_compressed,
                 &workload_stats,
             );
 
@@ -1686,6 +1712,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB files
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1702,6 +1729,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB (not an outlier)
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1718,12 +1746,14 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB = 1x median
+                false, // uncompressed
                 &stats,
             );
             let should_chunk_large = decide_routing(
                 files_remaining,
                 num_workers,
                 12 * 1024 * 1024 * 1024, // 12GB = 2.4x median
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1759,6 +1789,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 209715200, // 200MB
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1776,6 +1807,7 @@ mod tests {
             1,           // Last file
             num_workers,
             616354689,   // ~600MB
+            false, // uncompressed
             &stats,
         );
         assert!(
@@ -1803,6 +1835,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 120 * 1024 * 1024, // 120MB
+                false, // uncompressed
                 &stats,
             );
             // files_remaining = 5,4 (> 3) → use Scenario 3 rules
@@ -1823,6 +1856,7 @@ mod tests {
             1,
             num_workers,
             1346 * 1024 * 1024, // 1.3GB
+            false, // uncompressed
             &stats,
         );
         assert!(
@@ -1850,6 +1884,7 @@ mod tests {
             1,
             num_workers,
             100 * 1024 * 1024 * 1024, // 100GB
+            false, // uncompressed
             &stats,
         );
 
@@ -1879,6 +1914,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 1024 * 1024, // 1MB
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1907,6 +1943,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 100 * 1024 * 1024, // 100MB
+                false, // uncompressed
                 &stats,
             );
             assert!(
@@ -1924,6 +1961,7 @@ mod tests {
             25,
             num_workers,
             5 * 1024 * 1024 * 1024, // 5GB
+            false, // uncompressed
             &stats,
         );
         assert!(
@@ -1944,12 +1982,14 @@ mod tests {
                 path: PathBuf::from("file.log"),
                 size: 200 * 1024 * 1024, // 200MB
                 is_stdin: false,
+                is_compressed: false,
             });
         }
         file_infos.push(FileInfo {
             path: PathBuf::from("huge.tar.gz"),
             size: 2 * 1024 * 1024 * 1024, // 2GB outlier
             is_stdin: false,
+            is_compressed: true, // .tar.gz is compressed
         });
 
         let workload_stats = compute_workload_stats(&file_infos);
