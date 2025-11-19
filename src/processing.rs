@@ -1331,18 +1331,25 @@ where
         std::collections::HashMap::<usize, WorkerStats>::new(),
     ));
 
+    // Create SystemState for dynamic routing decisions
+    let system_state = Arc::new(SystemState::new(num_workers, num_readers));
+
     // Spawn reader pool ONLY if files will be chunked (could be 0 readers!)
     let mut reader_handles = Vec::new();
     if num_readers > 0 {
         for _reader_id in 0..num_readers {
             let file_rx = Arc::clone(&file_receiver);
             let work_tx = work_sender.clone();
+            let state = Arc::clone(&system_state);
 
             let handle = thread::spawn(move || {
                 // Pull files from queue and chunk them
                 loop {
                     let file_path = match file_rx.lock().unwrap().recv() {
-                        Ok(path) => path,
+                        Ok(path) => {
+                            state.dec_reader_queue(); // File removed from queue
+                            path
+                        }
                         Err(_) => break, // File queue closed
                     };
 
@@ -1350,6 +1357,7 @@ where
                     if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
                         eprintln!("Reader error: {}", e);
                     }
+                    state.record_chunk_processed();
                 }
             });
 
@@ -1363,6 +1371,7 @@ where
     for worker_id in 0..num_workers {
         let receiver = Arc::clone(&work_receiver);
         let factory = Arc::clone(&worker_factory);
+        let state = Arc::clone(&system_state);
 
         let progress_cb = progress_callback.clone();
         let stats_map = Arc::clone(&worker_stats_map);
@@ -1384,7 +1393,10 @@ where
             // Process work units until channel closes
             loop {
                 let unit = match receiver.lock().unwrap().recv() {
-                    Ok(u) => u,
+                    Ok(u) => {
+                        state.dec_worker_queue(); // Work unit removed from queue
+                        u
+                    }
                     Err(_) => break, // Channel closed
                 };
 
@@ -1395,6 +1407,11 @@ where
                     Err(e) => {
                         eprintln!("Processing error: {}", e);
                     }
+                }
+
+                // Record completion for dynamic routing decisions
+                if matches!(unit, WorkUnit::WholeFile { .. }) {
+                    state.record_file_completion();
                 }
 
                 // Call progress callback periodically
@@ -1456,6 +1473,11 @@ where
     for (idx, file_info) in file_infos.iter().enumerate() {
         let files_remaining = file_count - idx;
 
+        // Wait until we have capacity to route (dynamic routing - late binding!)
+        while !system_state.has_routing_capacity() {
+            thread::sleep(Duration::from_millis(10));
+        }
+
         if file_info.is_stdin {
             // Always route stdin to file queue for chunking (can't stat it, unknown size)
             routing_stats.files_to_readers += 1;
@@ -1471,6 +1493,7 @@ where
                     idx, file_info.path.display());
             }
 
+            system_state.inc_reader_queue(); // Track queue depth
             file_sender
                 .send(file_info.path.clone())
                 .map_err(|_| "File queue closed unexpectedly")?;
@@ -1512,6 +1535,7 @@ where
                         idx, file_info.path.display(), size_mb, vs_median, scenario);
                 }
 
+                system_state.inc_reader_queue(); // Track queue depth
                 file_sender
                     .send(file_info.path.clone())
                     .map_err(|_| "File queue closed unexpectedly")?;
@@ -1532,6 +1556,7 @@ where
                         idx, file_info.path.display(), size_mb, vs_median, scenario);
                 }
 
+                system_state.inc_worker_queue(); // Track queue depth
                 work_sender
                     .send(WorkUnit::WholeFile {
                         path: file_info.path.clone(),
