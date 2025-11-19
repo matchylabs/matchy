@@ -107,7 +107,10 @@ impl ExtractorBuilder {
         // Use from_mmap for zero-copy - no heap allocation, just borrows the .rodata section
         let tld_matcher = if self.extract_domains {
             let paraglob = unsafe {
-                crate::paraglob_offset::Paraglob::from_mmap(TLD_AUTOMATON, MatchMode::CaseInsensitive)?
+                crate::paraglob_offset::Paraglob::from_mmap(
+                    TLD_AUTOMATON,
+                    MatchMode::CaseInsensitive,
+                )?
             };
             Some(paraglob)
         } else {
@@ -779,7 +782,7 @@ impl Extractor {
         }
 
         // Parse up to 4 octets
-        for octet_idx in 0..4 {
+        for (octet_idx, octet) in octets.iter_mut().enumerate() {
             // Parse octet (1-3 digits) directly from bytes without allocation
             let mut octet_value: u16 = 0; // u16 to detect overflow (> 255)
             let mut digit_count = 0;
@@ -807,7 +810,7 @@ impl Extractor {
                 return None;
             }
 
-            octets[octet_idx] = octet_value as u8;
+            *octet = octet_value as u8;
 
             // Expect dot after first 3 octets
             if octet_idx < 3 {

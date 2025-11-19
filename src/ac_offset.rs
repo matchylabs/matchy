@@ -418,6 +418,10 @@ pub struct ACAutomaton {
     mode: MatchMode,
     /// Original patterns (needed for returning matches)
     patterns: Vec<String>,
+    /// Cached root transition characters for fast-forward scanning
+    /// Contains all characters that can start a match from the root node.
+    /// Sorted and deduplicated for efficient SIMD scanning.
+    root_transition_chars: Vec<u8>,
 }
 
 impl ACAutomaton {
@@ -427,6 +431,7 @@ impl ACAutomaton {
             buffer: Vec::new(),
             mode,
             patterns: Vec::new(),
+            root_transition_chars: Vec::new(),
         }
     }
 
@@ -454,11 +459,173 @@ impl ACAutomaton {
         let stored_patterns = builder.patterns.clone();
         let buffer = builder.serialize()?; // Propagate error
 
+        // Extract root transition characters for fast-forward optimization
+        let root_chars = Self::extract_root_chars(&buffer);
+
         Ok(Self {
             buffer,
             mode,
             patterns: stored_patterns,
+            root_transition_chars: root_chars,
         })
+    }
+
+    /// Extract all characters that have transitions from the root node
+    ///
+    /// This is used for fast-forward optimization - we can skip to the next
+    /// occurrence of any of these characters when we're at the root with no match.
+    ///
+    /// Returns a sorted, deduplicated vector of characters.
+    fn extract_root_chars(buffer: &[u8]) -> Vec<u8> {
+        let mut chars = Vec::new();
+
+        if buffer.is_empty() {
+            return chars;
+        }
+
+        // Read root node at offset 0
+        let node_slice = match buffer.get(0..) {
+            Some(s) => s,
+            None => return chars,
+        };
+
+        let node_ref = match Ref::<_, ACNodeHot>::from_prefix(node_slice) {
+            Ok((r, _)) => r,
+            Err(_) => return chars,
+        };
+        let node = *node_ref;
+
+        let kind = match StateKind::from_u8(node.state_kind) {
+            Some(k) => k,
+            None => return chars,
+        };
+
+        match kind {
+            StateKind::Empty => {}
+
+            StateKind::One => {
+                chars.push(node.one_char);
+            }
+
+            StateKind::Sparse => {
+                // Extract all edge characters
+                let edges_offset = node.edges_offset as usize;
+                let edge_size = mem::size_of::<ACEdge>();
+                let count = node.edge_count as usize;
+
+                for i in 0..count {
+                    let edge_offset = edges_offset + i * edge_size;
+                    if let Some(edge_slice) = buffer.get(edge_offset..) {
+                        if let Ok((edge_ref, _)) = Ref::<_, ACEdge>::from_prefix(edge_slice) {
+                            chars.push(edge_ref.character);
+                        }
+                    }
+                }
+            }
+
+            StateKind::Dense => {
+                // Extract all non-zero transitions from dense table
+                let lookup_offset = node.edges_offset as usize;
+                for ch in 0u8..=255 {
+                    let target_offset_offset = lookup_offset + (ch as usize * 4);
+                    if target_offset_offset + 4 <= buffer.len() {
+                        let target = u32::from_le_bytes([
+                            buffer[target_offset_offset],
+                            buffer[target_offset_offset + 1],
+                            buffer[target_offset_offset + 2],
+                            buffer[target_offset_offset + 3],
+                        ]);
+                        if target != 0 {
+                            chars.push(ch);
+                        }
+                    }
+                }
+            }
+        }
+
+        chars.sort_unstable();
+        chars.dedup();
+        chars
+    }
+
+    /// Fast-forward to the next potential match position
+    ///
+    /// Scans text looking for any character that can start a match from the root node.
+    /// Uses SIMD automatically via the memchr crate (SSE2/AVX2/AVX-512 on x86_64, NEON on aarch64).
+    ///
+    /// # Performance
+    ///
+    /// - 1-3 root transitions: Uses memchr/memchr2/memchr3 (extremely fast, SIMD-accelerated)
+    /// - 4-16 root transitions: Uses bit-parallel technique with potential auto-vectorization
+    /// - 16+ root transitions: Returns current position (fast-forward not beneficial)
+    ///
+    /// # Returns
+    ///
+    /// - `Some(pos)`: Position of next character that could start a match
+    /// - `None`: No possible matches in remaining text
+    #[inline]
+    fn fast_forward(&self, text: &[u8], start: usize) -> Option<usize> {
+        use memchr::{memchr, memchr2, memchr3};
+
+        if start >= text.len() {
+            return None;
+        }
+
+        match self.root_transition_chars.len() {
+            0 => None, // No patterns
+            1 => {
+                // Single character: use memchr (fastest path)
+                memchr(self.root_transition_chars[0], &text[start..]).map(|offset| start + offset)
+            }
+            2 => {
+                // Two characters: use memchr2
+                memchr2(
+                    self.root_transition_chars[0],
+                    self.root_transition_chars[1],
+                    &text[start..],
+                )
+                .map(|offset| start + offset)
+            }
+            3 => {
+                // Three characters: use memchr3
+                memchr3(
+                    self.root_transition_chars[0],
+                    self.root_transition_chars[1],
+                    self.root_transition_chars[2],
+                    &text[start..],
+                )
+                .map(|offset| start + offset)
+            }
+            4..=16 => {
+                // 4-16 characters: use bit-parallel technique
+                self.fast_forward_bitset(text, start)
+            }
+            _ => {
+                // Many transitions from root - AC is already efficient without fast-forward
+                Some(start)
+            }
+        }
+    }
+
+    /// Bit-parallel fast-forward for 4-16 root transitions
+    ///
+    /// Uses a 256-bit lookup table (32 bytes) to check membership.
+    /// This loop often auto-vectorizes on modern compilers.
+    #[inline]
+    fn fast_forward_bitset(&self, text: &[u8], start: usize) -> Option<usize> {
+        // Build 256-bit lookup table (one bit per ASCII value)
+        let mut lookup = [0u8; 32];
+        for &ch in &self.root_transition_chars {
+            lookup[ch as usize / 8] |= 1 << (ch % 8);
+        }
+
+        // Branchless scan - compiler often vectorizes this
+        for (i, &ch) in text[start..].iter().enumerate() {
+            if (lookup[ch as usize / 8] & (1 << (ch % 8))) != 0 {
+                return Some(start + i);
+            }
+        }
+        None
     }
 
     /// Find all matches with their end positions
@@ -491,7 +658,15 @@ impl ACAutomaton {
         let mut matches = Vec::new();
         let mut current_offset = 0usize;
 
-        for (pos, &ch) in text_bytes.iter().enumerate() {
+        // OPTIMIZATION: Skip to first potential match using fast-forward
+        let mut pos = if let Some(first_pos) = self.fast_forward(text_bytes, 0) {
+            first_pos
+        } else {
+            return matches; // No possible matches in entire text
+        };
+
+        while pos < text_bytes.len() {
+            let ch = text_bytes[pos];
             let mut next_offset = self.find_transition(current_offset, ch);
 
             while next_offset.is_none() && current_offset != 0 {
@@ -519,14 +694,30 @@ impl ACAutomaton {
 
             current_offset = next_offset.unwrap_or(0);
 
+            // OPTIMIZATION: If we're back at root and no transition, fast-forward
+            if current_offset == 0 && next_offset.is_none() {
+                if let Some(next_pos) = self.fast_forward(text_bytes, pos + 1) {
+                    pos = next_pos;
+                    continue;
+                } else {
+                    break; // No more matches possible
+                }
+            }
+
             // Collect matches at this position (end pos is pos + 1)
             let node_slice = match self.buffer.get(current_offset..) {
                 Some(s) => s,
-                None => continue,
+                None => {
+                    pos += 1;
+                    continue;
+                }
             };
             let node_ref = match Ref::<_, ACNodeHot>::from_prefix(node_slice) {
                 Ok((r, _)) => r,
-                Err(_) => continue,
+                Err(_) => {
+                    pos += 1;
+                    continue;
+                }
             };
             let node = *node_ref;
 
@@ -545,6 +736,8 @@ impl ACAutomaton {
                     }
                 }
             }
+
+            pos += 1;
         }
 
         matches
@@ -578,7 +771,16 @@ impl ACAutomaton {
         let mut pattern_ids = Vec::new();
         let mut current_offset = 0usize; // Root node
 
-        for &ch in text_bytes.iter() {
+        // OPTIMIZATION: Skip to first potential match using fast-forward
+        let mut pos = if let Some(first_pos) = self.fast_forward(text_bytes, 0) {
+            first_pos
+        } else {
+            return pattern_ids; // No possible matches in entire text
+        };
+
+        while pos < text_bytes.len() {
+            let ch = text_bytes[pos];
+
             // Try to find transition from current node
             let mut next_offset = self.find_transition(current_offset, ch);
 
@@ -610,15 +812,31 @@ impl ACAutomaton {
             // Update current position
             current_offset = next_offset.unwrap_or(0);
 
+            // OPTIMIZATION: If we're back at root and no transition, fast-forward
+            if current_offset == 0 && next_offset.is_none() {
+                if let Some(next_pos) = self.fast_forward(text_bytes, pos + 1) {
+                    pos = next_pos;
+                    continue;
+                } else {
+                    break; // No more matches possible
+                }
+            }
+
             // Collect pattern IDs at this state
             // Note: Patterns from suffix states were already merged during build_failure_links
             let node_slice = match self.buffer.get(current_offset..) {
                 Some(s) => s,
-                None => continue,
+                None => {
+                    pos += 1;
+                    continue;
+                }
             };
             let node_ref = match Ref::<_, ACNodeHot>::from_prefix(node_slice) {
                 Ok((r, _)) => r,
-                Err(_) => continue,
+                Err(_) => {
+                    pos += 1;
+                    continue;
+                }
             };
             let node = *node_ref;
             if node.pattern_count > 0 {
@@ -637,6 +855,8 @@ impl ACAutomaton {
                     }
                 }
             }
+
+            pos += 1;
         }
 
         // Deduplicate and sort
@@ -779,10 +999,14 @@ impl ACAutomaton {
     ) -> Result<Self, ParaglobError> {
         // TODO: Validate buffer format
 
+        // Extract root transition characters for fast-forward optimization
+        let root_chars = Self::extract_root_chars(&buffer);
+
         Ok(Self {
             buffer,
             mode,
             patterns,
+            root_transition_chars: root_chars,
         })
     }
 }
@@ -841,5 +1065,164 @@ mod tests {
 
         let ids = ac.find_pattern_ids("testing");
         assert_eq!(ids.len(), 3); // All three patterns match
+    }
+
+    #[test]
+    fn test_fast_forward_single_pattern() {
+        // Single pattern: fast-forward should use memchr
+        let patterns = vec!["pattern"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        // Verify root transition chars extracted correctly
+        assert_eq!(ac.root_transition_chars.len(), 1);
+        assert_eq!(ac.root_transition_chars[0], b'p');
+
+        // Test with sparse matches
+        let text = "aaaaaaaaapattern bbbbbbbbbpattern ccccccccc";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+
+        // Test with positions
+        let matches = ac.find_with_positions(text);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (16, 0)); // End of first "pattern"
+        assert_eq!(matches[1], (33, 0)); // End of second "pattern"
+    }
+
+    #[test]
+    fn test_fast_forward_two_patterns() {
+        // Two patterns starting with different chars: fast-forward should use memchr2
+        let patterns = vec!["apple", "banana"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        // Verify root transition chars
+        assert_eq!(ac.root_transition_chars.len(), 2);
+        assert!(ac.root_transition_chars.contains(&b'a'));
+        assert!(ac.root_transition_chars.contains(&b'b'));
+
+        // Test with text that should be skipped
+        let text = "zzzzzzzzapplezzzzzzbananazzzzzz";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&0)); // apple
+        assert!(ids.contains(&1)); // banana
+    }
+
+    #[test]
+    fn test_fast_forward_three_patterns() {
+        // Three patterns: fast-forward should use memchr3
+        let patterns = vec!["cat", "dog", "fish"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        // Verify root transition chars
+        assert_eq!(ac.root_transition_chars.len(), 3);
+        assert!(ac.root_transition_chars.contains(&b'c'));
+        assert!(ac.root_transition_chars.contains(&b'd'));
+        assert!(ac.root_transition_chars.contains(&b'f'));
+
+        let text = "xxxcatxxxdogxxxfishxxx";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn test_fast_forward_many_patterns() {
+        // 4-16 patterns: should use bitset fast-forward
+        let patterns = vec!["a1", "b2", "c3", "d4", "e5"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        // Verify root transition chars
+        assert_eq!(ac.root_transition_chars.len(), 5);
+
+        let text = "zzza1zzzb2zzzc3zzzd4zzze5zzz";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 5);
+    }
+
+    #[test]
+    fn test_fast_forward_no_matches() {
+        // Fast-forward should quickly determine no matches
+        let patterns = vec!["pattern"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        let text = "abcdefghijklmnoxyz"; // No 'p' anywhere
+        let ids = ac.find_pattern_ids(text);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_fast_forward_match_at_start() {
+        let patterns = vec!["start"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        let text = "start of the text";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+    }
+
+    #[test]
+    fn test_fast_forward_match_at_end() {
+        let patterns = vec!["end"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        let text = "text finishes at the end";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+    }
+
+    #[test]
+    fn test_fast_forward_sparse_matches() {
+        // Test with very sparse matches (fast-forward should shine here)
+        let patterns = vec!["needle"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        // 1000 bytes with only 2 matches
+        let mut text = String::new();
+        for _ in 0..250 {
+            text.push('x');
+        }
+        text.push_str("needle");
+        for _ in 0..250 {
+            text.push('y');
+        }
+        text.push_str("needle");
+        for _ in 0..238 {
+            text.push('z');
+        }
+
+        let ids = ac.find_pattern_ids(&text);
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains(&0));
+
+        let matches = ac.find_with_positions(&text);
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_fast_forward_dense_matches() {
+        // Test with dense matches (fast-forward less beneficial but should still work)
+        let patterns = vec!["a"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        let text = "aaaaaaaaaaaa";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 1);
+
+        let matches = ac.find_with_positions(text);
+        assert_eq!(matches.len(), 12); // Every 'a' matches
+    }
+
+    #[test]
+    fn test_fast_forward_with_overlaps() {
+        // Ensure fast-forward doesn't skip overlapping matches
+        let patterns = vec!["aba", "bab"];
+        let ac = ACAutomaton::build(&patterns, MatchMode::CaseSensitive).unwrap();
+
+        let text = "abababa";
+        let ids = ac.find_pattern_ids(text);
+        assert_eq!(ids.len(), 2); // Both patterns should match
     }
 }
