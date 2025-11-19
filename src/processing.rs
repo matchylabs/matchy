@@ -83,13 +83,10 @@ struct SystemState {
 
     /// Number of worker threads
     num_workers: usize,
-
-    /// Number of reader threads
-    num_readers: usize,
 }
 
 impl SystemState {
-    fn new(num_workers: usize, num_readers: usize) -> Self {
+    fn new(num_workers: usize, _num_readers: usize) -> Self {
         Self {
             worker_queue_depth: AtomicUsize::new(0),
             reader_queue_depth: AtomicUsize::new(0),
@@ -97,7 +94,6 @@ impl SystemState {
             chunks_processed_recent: AtomicUsize::new(0),
             last_completion_ns: AtomicU64::new(0),
             num_workers,
-            num_readers,
         }
     }
 
@@ -106,18 +102,6 @@ impl SystemState {
         let worker_depth = self.worker_queue_depth.load(Ordering::Relaxed);
         // Allow routing when queue is not full (threshold: MAX_QUEUE_PER_WORKER * num_workers)
         worker_depth < (MAX_QUEUE_PER_WORKER * self.num_workers)
-    }
-
-    /// Check if workers are hungry (need more work)
-    fn workers_are_hungry(&self) -> bool {
-        let depth = self.worker_queue_depth.load(Ordering::Relaxed);
-        // Workers are "hungry" if queue < 1.5x num_workers
-        depth < (self.num_workers * 3 / 2)
-    }
-
-    /// Get recent completion rate (files per second, approximate)
-    fn completion_rate(&self) -> usize {
-        self.files_completed_recent.load(Ordering::Relaxed)
     }
 
     /// Record a file completion
