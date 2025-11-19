@@ -46,13 +46,114 @@ use crate::{Database, QueryResult};
 use std::fs;
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 // File size thresholds for chunk size selection
 const LARGE_FILE: u64 = 1024 * 1024 * 1024; // 1GB
 const HUGE_FILE: u64 = 10 * 1024 * 1024 * 1024; // 10GB
+
+// Queue management for dynamic routing
+const MAX_QUEUE_PER_WORKER: usize = 2; // Keep queues very short for responsiveness
+
+/// System state for dynamic routing decisions
+///
+/// Tracks real-time system utilization to make intelligent routing decisions.
+/// Workers and readers update these atomics as they process work, allowing the
+/// main routing thread to see near-real-time system state.
+#[derive(Debug)]
+struct SystemState {
+    /// Current depth of worker queue (how many work units are waiting)
+    worker_queue_depth: AtomicUsize,
+
+    /// Current depth of file queue (how many files waiting to be chunked)
+    reader_queue_depth: AtomicUsize,
+
+    /// Number of files completed in the last measurement window
+    files_completed_recent: AtomicUsize,
+
+    /// Number of chunks processed in the last measurement window
+    chunks_processed_recent: AtomicUsize,
+
+    /// Timestamp of last completion (for stall detection)
+    last_completion_ns: AtomicU64,
+
+    /// Number of worker threads
+    num_workers: usize,
+
+    /// Number of reader threads
+    num_readers: usize,
+}
+
+impl SystemState {
+    fn new(num_workers: usize, num_readers: usize) -> Self {
+        Self {
+            worker_queue_depth: AtomicUsize::new(0),
+            reader_queue_depth: AtomicUsize::new(0),
+            files_completed_recent: AtomicUsize::new(0),
+            chunks_processed_recent: AtomicUsize::new(0),
+            last_completion_ns: AtomicU64::new(0),
+            num_workers,
+            num_readers,
+        }
+    }
+
+    /// Check if we have capacity to add more work to queues
+    fn has_routing_capacity(&self) -> bool {
+        let worker_depth = self.worker_queue_depth.load(Ordering::Relaxed);
+        // Allow routing when queue is not full (threshold: MAX_QUEUE_PER_WORKER * num_workers)
+        worker_depth < (MAX_QUEUE_PER_WORKER * self.num_workers)
+    }
+
+    /// Check if workers are hungry (need more work)
+    fn workers_are_hungry(&self) -> bool {
+        let depth = self.worker_queue_depth.load(Ordering::Relaxed);
+        // Workers are "hungry" if queue < 1.5x num_workers
+        depth < (self.num_workers * 3 / 2)
+    }
+
+    /// Get recent completion rate (files per second, approximate)
+    fn completion_rate(&self) -> usize {
+        self.files_completed_recent.load(Ordering::Relaxed)
+    }
+
+    /// Record a file completion
+    fn record_file_completion(&self) {
+        self.files_completed_recent.fetch_add(1, Ordering::Relaxed);
+        self.last_completion_ns.store(
+            Instant::now().elapsed().as_nanos() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Record a chunk processed
+    fn record_chunk_processed(&self) {
+        self.chunks_processed_recent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment worker queue depth
+    fn inc_worker_queue(&self) {
+        self.worker_queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement worker queue depth
+    fn dec_worker_queue(&self) {
+        self.worker_queue_depth.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Increment reader queue depth
+    fn inc_reader_queue(&self) {
+        self.reader_queue_depth.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement reader queue depth
+    fn dec_reader_queue(&self) {
+        self.reader_queue_depth.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// A unit of work that can be processed independently
 ///
@@ -736,6 +837,7 @@ struct FileInfo {
     path: PathBuf,
     size: u64,
     is_stdin: bool,
+    is_compressed: bool,
 }
 
 /// Workload statistics computed from file metadata
@@ -751,6 +853,7 @@ struct WorkloadStats {
 #[derive(Debug, Clone)]
 struct RoutingDecision {
     size: u64,
+    is_compressed: bool,
     routed_to_reader: bool,
 }
 
@@ -794,6 +897,26 @@ pub struct ParallelProcessingResult {
 }
 
 /// Collect metadata for all files upfront
+/// Detect if a file is compressed based on extension
+fn is_file_compressed(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        matches!(
+            ext.to_lowercase().as_str(),
+            "gz" | "bz2" | "xz" | "zst" | "lz4" | "lzma" | "z"
+        )
+    } else {
+        // Check for multi-extension like .tar.gz
+        path.to_str()
+            .map(|s| {
+                s.ends_with(".tar.gz")
+                    || s.ends_with(".tar.bz2")
+                    || s.ends_with(".tar.xz")
+                    || s.ends_with(".tar.zst")
+            })
+            .unwrap_or(false)
+    }
+}
+
 fn collect_file_metadata(files: &[PathBuf]) -> Result<Vec<FileInfo>, String> {
     let mut file_infos = Vec::with_capacity(files.len());
 
@@ -806,11 +929,13 @@ fn collect_file_metadata(files: &[PathBuf]) -> Result<Vec<FileInfo>, String> {
                 .map_err(|e| format!("Failed to stat {}: {}", path.display(), e))?
                 .len()
         };
+        let is_compressed = !is_stdin && is_file_compressed(path);
 
         file_infos.push(FileInfo {
             path: path.clone(),
             size,
             is_stdin,
+            is_compressed,
         });
     }
 
@@ -973,12 +1098,16 @@ fn export_routing_test(
     writeln!(file, "")
         .map_err(|e| format!("Write failed: {}", e))?;
 
-    // Write file sizes
-    writeln!(file, "    let file_sizes = vec![")
+    // Write file metadata (size + compression)
+    writeln!(file, "    // Each entry is (size_bytes, is_compressed)")
+        .map_err(|e| format!("Write failed: {}", e))?;
+    writeln!(file, "    let file_metadata = vec![")
         .map_err(|e| format!("Write failed: {}", e))?;
     for decision in routing_decisions {
         let mb = decision.size as f64 / (1024.0 * 1024.0);
-        writeln!(file, "        {}, // {:.2} MB", decision.size, mb)
+        let comp_str = if decision.is_compressed { "compressed" } else { "uncompressed" };
+        writeln!(file, "        ({}, {}), // {:.2} MB, {}",
+            decision.size, decision.is_compressed, mb, comp_str)
             .map_err(|e| format!("Write failed: {}", e))?;
     }
     writeln!(file, "    ];")
@@ -989,9 +1118,9 @@ fn export_routing_test(
     // Write test assertions
     writeln!(file, "    // Test routing decisions for each file")
         .map_err(|e| format!("Write failed: {}", e))?;
-    writeln!(file, "    for (idx, &size) in file_sizes.iter().enumerate() {{")
+    writeln!(file, "    for (idx, &(size, is_compressed)) in file_metadata.iter().enumerate() {{")
         .map_err(|e| format!("Write failed: {}", e))?;
-    writeln!(file, "        let files_remaining = file_sizes.len() - idx;")
+    writeln!(file, "        let files_remaining = file_metadata.len() - idx;")
         .map_err(|e| format!("Write failed: {}", e))?;
     writeln!(file, "        let should_chunk = decide_routing(files_remaining, num_workers, size, &stats);")
         .map_err(|e| format!("Write failed: {}", e))?;
@@ -1002,7 +1131,8 @@ fn export_routing_test(
     for (idx, decision) in routing_decisions.iter().enumerate() {
         let expected = decision.routed_to_reader;
         let mb = decision.size as f64 / (1024.0 * 1024.0);
-        writeln!(file, "        if idx == {} {{ // {:.2} MB", idx, mb)
+        let comp_str = if decision.is_compressed { "compressed" } else { "uncompressed" };
+        writeln!(file, "        if idx == {} {{ // {:.2} MB, {}", idx, mb, comp_str)
             .map_err(|e| format!("Write failed: {}", e))?;
         writeln!(file, "            assert_eq!(should_chunk, {}, \"File {} routing mismatch\");",
             expected, idx)
@@ -1307,6 +1437,7 @@ where
             routing_stats.bytes_to_readers += 0; // Size unknown
             routing_decisions.push(RoutingDecision {
                 size: 0,
+                is_compressed: false, // Unknown for stdin
                 routed_to_reader: true,
             });
 
@@ -1344,6 +1475,7 @@ where
                 routing_stats.bytes_to_readers += file_info.size;
                 routing_decisions.push(RoutingDecision {
                     size: file_info.size,
+                    is_compressed: file_info.is_compressed,
                     routed_to_reader: true,
                 });
 
@@ -1363,6 +1495,7 @@ where
                 routing_stats.bytes_to_workers += file_info.size;
                 routing_decisions.push(RoutingDecision {
                     size: file_info.size,
+                    is_compressed: file_info.is_compressed,
                     routed_to_reader: false,
                 });
 
