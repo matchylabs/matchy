@@ -26,7 +26,6 @@ pub fn cmd_match(
     cache_size: usize,
     extractors_arg: Option<String>,
     debug_routing: bool,
-    export_test: Option<PathBuf>,
 ) -> Result<()> {
     use matchy::extractor::Extractor;
     use matchy::Database;
@@ -256,7 +255,6 @@ pub fn cmd_match(
             overall_start,
             extractor_config,
             debug_routing,
-            export_test.clone(),
         )?;
         aggregate_stats = stats;
         actual_workers = workers;
