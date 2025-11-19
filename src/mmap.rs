@@ -199,7 +199,7 @@ impl MmapFile {
     /// Caller must ensure the mmap pointer and size are valid.
     #[cfg(unix)]
     unsafe fn optimize_mmap(mmap: &Mmap, size: usize) {
-        use libc::{madvise, mlock, MADV_RANDOM, MADV_WILLNEED};
+        use libc::{madvise, mlock, MADV_RANDOM};
 
         let ptr = mmap.as_ptr() as *mut libc::c_void;
 
@@ -221,14 +221,22 @@ impl MmapFile {
         // macOS with Apple Silicon automatically uses 16K pages for file mappings
         // when the size and alignment are appropriate. No explicit hint needed.
 
-        // Prefetch entire file into page cache (all Unix platforms)
-        madvise(ptr, size, MADV_WILLNEED);
+        // Don't prefetch - let OS lazily load pages on demand.
+        // MADV_WILLNEED would force synchronous I/O at mmap time, which:
+        // - Blocks the thread
+        // - Loads entire file even if we only need part of it
+        // - Shows up as mmap() time in profilers
+        //
+        // Instead, use MADV_RANDOM to disable readahead since our access
+        // pattern is unpredictable (hash lookups, trie traversal, etc.)
+        madvise(ptr, size, MADV_RANDOM);
 
         // Try to lock pages in RAM (requires elevated permissions)
-        // Falls back gracefully if permission denied
-        if mlock(ptr, size) != 0 {
-            // mlock failed - use random access hint to disable readahead
-            madvise(ptr, size, MADV_RANDOM);
+        // Only do this if the file is small enough to be reasonable.
+        // Falls back gracefully if permission denied or file too large.
+        const MAX_MLOCK_SIZE: usize = 256 * 1024 * 1024; // 256MB
+        if size <= MAX_MLOCK_SIZE {
+            let _ = mlock(ptr, size); // Ignore errors - mlock is best-effort
         }
     }
 

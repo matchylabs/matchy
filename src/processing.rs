@@ -775,12 +775,27 @@ fn extract_line_from_batch(batch: &LineBatch, line_number: usize) -> String {
         .to_string()
 }
 
-/// Determine appropriate chunk size based on file size
-fn chunk_size_for(file_size: u64) -> usize {
-    match file_size {
-        s if s < LARGE_FILE => 256 * 1024, // 256KB for < 1GB
-        s if s < HUGE_FILE => 1024 * 1024, // 1MB for 1-10GB
-        _ => 4 * 1024 * 1024,              // 4MB for > 10GB
+/// Determine appropriate chunk size based on file size and compression
+/// 
+/// Compressed files use larger chunks because:
+/// - Decompression overhead is per-read operation
+/// - Larger chunks mean fewer decompress->compress cycles
+/// - Workers can stay busier with bigger batches
+fn chunk_size_for(file_size: u64, is_compressed: bool) -> usize {
+    if is_compressed {
+        // Compressed: Larger chunks to amortize decompression overhead
+        match file_size {
+            s if s < LARGE_FILE => 4 * 1024 * 1024,   // 4MB chunks
+            s if s < HUGE_FILE => 16 * 1024 * 1024,   // 16MB chunks
+            _ => 32 * 1024 * 1024,                    // 32MB chunks for huge files
+        }
+    } else {
+        // Uncompressed: Smaller chunks for better parallelism
+        match file_size {
+            s if s < LARGE_FILE => 256 * 1024,   // 256KB
+            s if s < HUGE_FILE => 1024 * 1024,   // 1MB
+            _ => 4 * 1024 * 1024,                // 4MB
+        }
     }
 }
 
@@ -794,10 +809,11 @@ fn reader_thread_chunker(file_path: PathBuf, work_sender: &Sender<WorkUnit>) -> 
         // Use default chunk size for stdin
         256 * 1024 // 256KB
     } else {
-        let file_size = fs::metadata(&file_path)
-            .map_err(|e| format!("Failed to stat {}: {}", file_path.display(), e))?
-            .len();
-        chunk_size_for(file_size)
+        let metadata = fs::metadata(&file_path)
+            .map_err(|e| format!("Failed to stat {}: {}", file_path.display(), e))?;
+        let file_size = metadata.len();
+        let is_compressed = is_file_compressed(&file_path);
+        chunk_size_for(file_size, is_compressed)
     };
 
     let mut reader = LineFileReader::new(&file_path, chunk_size)
@@ -1542,14 +1558,15 @@ mod tests {
 
     #[test]
     fn test_chunk_size_selection() {
-        // Small files: 256KB chunks
-        assert_eq!(chunk_size_for(500 * 1024 * 1024), 256 * 1024);
-
-        // Medium files: 1MB chunks
-        assert_eq!(chunk_size_for(5 * 1024 * 1024 * 1024), 1024 * 1024);
-
-        // Huge files: 4MB chunks
-        assert_eq!(chunk_size_for(50 * 1024 * 1024 * 1024), 4 * 1024 * 1024);
+        // Uncompressed files: smaller chunks for parallelism
+        assert_eq!(chunk_size_for(500 * 1024 * 1024, false), 256 * 1024);
+        assert_eq!(chunk_size_for(5 * 1024 * 1024 * 1024, false), 1024 * 1024);
+        assert_eq!(chunk_size_for(50 * 1024 * 1024 * 1024, false), 4 * 1024 * 1024);
+        
+        // Compressed files: larger chunks to amortize decompression
+        assert_eq!(chunk_size_for(500 * 1024 * 1024, true), 4 * 1024 * 1024);
+        assert_eq!(chunk_size_for(5 * 1024 * 1024 * 1024, true), 16 * 1024 * 1024);
+        assert_eq!(chunk_size_for(50 * 1024 * 1024 * 1024, true), 32 * 1024 * 1024);
     }
 
     #[test]
