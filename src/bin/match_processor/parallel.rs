@@ -228,7 +228,12 @@ pub fn process_parallel(
     aggregate.domain_count = result.worker_stats.domain_count;
     aggregate.email_count = result.worker_stats.email_count;
 
-    Ok((aggregate, result.actual_workers, result.actual_readers, result.routing_stats))
+    Ok((
+        aggregate,
+        result.actual_workers,
+        result.actual_readers,
+        result.routing_stats,
+    ))
 }
 
 /// Message from worker to output thread

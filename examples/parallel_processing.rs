@@ -74,7 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             Ok::<_, String>(worker)
         },
-        None::<fn(&processing::WorkerStats)>, // No progress callback
+        None::<fn(&processing::WorkerStats)>,
+        false, // Stop on first match (false for this example)
     )?;
 
     let elapsed = start.elapsed();

@@ -439,14 +439,8 @@ pub fn cmd_match(
         if actual_readers > 0 || actual_workers > 0 {
             eprintln!();
             eprintln!("[INFO] === Thread Allocation ===");
-            eprintln!(
-                "[INFO] Reader threads spawned: {}",
-                actual_readers
-            );
-            eprintln!(
-                "[INFO] Worker threads spawned: {}",
-                actual_workers
-            );
+            eprintln!("[INFO] Reader threads spawned: {}", actual_readers);
+            eprintln!("[INFO] Worker threads spawned: {}", actual_workers);
         }
 
         // Show routing statistics if available (parallel mode only)

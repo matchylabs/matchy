@@ -776,7 +776,7 @@ fn extract_line_from_batch(batch: &LineBatch, line_number: usize) -> String {
 }
 
 /// Determine appropriate chunk size based on file size and compression
-/// 
+///
 /// Compressed files use larger chunks because:
 /// - Decompression overhead is per-read operation
 /// - Larger chunks mean fewer decompress->compress cycles
@@ -785,16 +785,16 @@ fn chunk_size_for(file_size: u64, is_compressed: bool) -> usize {
     if is_compressed {
         // Compressed: Larger chunks to amortize decompression overhead
         match file_size {
-            s if s < LARGE_FILE => 4 * 1024 * 1024,   // 4MB chunks
-            s if s < HUGE_FILE => 16 * 1024 * 1024,   // 16MB chunks
-            _ => 32 * 1024 * 1024,                    // 32MB chunks for huge files
+            s if s < LARGE_FILE => 4 * 1024 * 1024, // 4MB chunks
+            s if s < HUGE_FILE => 16 * 1024 * 1024, // 16MB chunks
+            _ => 32 * 1024 * 1024,                  // 32MB chunks for huge files
         }
     } else {
         // Uncompressed: Smaller chunks for better parallelism
         match file_size {
-            s if s < LARGE_FILE => 256 * 1024,   // 256KB
-            s if s < HUGE_FILE => 1024 * 1024,   // 1MB
-            _ => 4 * 1024 * 1024,                // 4MB
+            s if s < LARGE_FILE => 256 * 1024, // 256KB
+            s if s < HUGE_FILE => 1024 * 1024, // 1MB
+            _ => 4 * 1024 * 1024,              // 4MB
         }
     }
 }
@@ -1011,8 +1011,8 @@ fn decide_routing(
             return true;
         }
         // Is this file a massive outlier (10x median AND > 500MB)?
-        let is_huge_outlier = file_size > stats.median_size.saturating_mul(10)
-                           && file_size > 500 * 1024 * 1024;
+        let is_huge_outlier =
+            file_size > stats.median_size.saturating_mul(10) && file_size > 500 * 1024 * 1024;
         return is_huge_outlier;
     }
 
@@ -1024,8 +1024,8 @@ fn decide_routing(
             return true;
         }
         // Chunk if significantly larger than typical files
-        let is_large = file_size > stats.p95_size
-                    || file_size > stats.median_size.saturating_mul(5);
+        let is_large =
+            file_size > stats.p95_size || file_size > stats.median_size.saturating_mul(5);
         let is_worth_chunking = file_size >= 100 * 1024 * 1024; // > 100MB
         return is_large && is_worth_chunking;
     }
@@ -1042,8 +1042,8 @@ fn decide_routing(
     // - File is huge (> 1GB) AND median is small (< 1GB)
     //   This handles single-file scenarios or where most files are small
     //   but avoids chunking uniform huge-file workloads (1000x 5GB files)
-    let is_straggler = file_size > stats.median_size.saturating_mul(2)
-                    && file_size > 300 * 1024 * 1024;
+    let is_straggler =
+        file_size > stats.median_size.saturating_mul(2) && file_size > 300 * 1024 * 1024;
     let is_huge_with_small_median = file_size > 1024 * 1024 * 1024 // > 1GB
                                   && stats.median_size < 1024 * 1024 * 1024; // median < 1GB
 
@@ -1128,6 +1128,7 @@ fn count_files_to_chunk(
 ///         Ok::<_, String>(worker)
 ///     },
 ///     None::<fn(&processing::WorkerStats)>, // No progress callback
+///     false,
 /// )?;
 ///
 /// println!("Found {} matches across all files", result.matches.len());
@@ -1166,15 +1167,21 @@ where
         eprintln!("\n[DEBUG] === Routing Analysis ===");
         eprintln!("[DEBUG] Workload statistics:");
         eprintln!("[DEBUG]   Total files: {}", file_count);
-        eprintln!("[DEBUG]   Median size: {} bytes ({:.2} MB)",
+        eprintln!(
+            "[DEBUG]   Median size: {} bytes ({:.2} MB)",
             workload_stats.median_size,
-            workload_stats.median_size as f64 / (1024.0 * 1024.0));
-        eprintln!("[DEBUG]   P95 size: {} bytes ({:.2} MB)",
+            workload_stats.median_size as f64 / (1024.0 * 1024.0)
+        );
+        eprintln!(
+            "[DEBUG]   P95 size: {} bytes ({:.2} MB)",
             workload_stats.p95_size,
-            workload_stats.p95_size as f64 / (1024.0 * 1024.0));
-        eprintln!("[DEBUG]   Total bytes: {} ({:.2} GB)",
+            workload_stats.p95_size as f64 / (1024.0 * 1024.0)
+        );
+        eprintln!(
+            "[DEBUG]   Total bytes: {} ({:.2} GB)",
             workload_stats.total_bytes,
-            workload_stats.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0));
+            workload_stats.total_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
         eprintln!("[DEBUG]   Workers: {}", num_workers);
         eprintln!("[DEBUG]   Predicted files to chunk: {}", files_to_chunk);
         eprintln!();
@@ -1362,8 +1369,11 @@ where
             routing_stats.bytes_to_readers += 0; // Size unknown
 
             if debug_routing {
-                eprintln!("[DEBUG] File {}: {} (stdin) → READER (unknown size, always chunk)",
-                    idx, file_info.path.display());
+                eprintln!(
+                    "[DEBUG] File {}: {} (stdin) → READER (unknown size, always chunk)",
+                    idx,
+                    file_info.path.display()
+                );
             }
 
             system_state.inc_reader_queue(); // Track queue depth
@@ -1398,9 +1408,16 @@ where
 
                 if debug_routing {
                     let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
-                    let vs_median = file_info.size as f64 / workload_stats.median_size.max(1) as f64;
-                    eprintln!("[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → READER ({})",
-                        idx, file_info.path.display(), size_mb, vs_median, scenario);
+                    let vs_median =
+                        file_info.size as f64 / workload_stats.median_size.max(1) as f64;
+                    eprintln!(
+                        "[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → READER ({})",
+                        idx,
+                        file_info.path.display(),
+                        size_mb,
+                        vs_median,
+                        scenario
+                    );
                 }
 
                 system_state.inc_reader_queue(); // Track queue depth
@@ -1414,9 +1431,16 @@ where
 
                 if debug_routing {
                     let size_mb = file_info.size as f64 / (1024.0 * 1024.0);
-                    let vs_median = file_info.size as f64 / workload_stats.median_size.max(1) as f64;
-                    eprintln!("[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → WORKER ({})",
-                        idx, file_info.path.display(), size_mb, vs_median, scenario);
+                    let vs_median =
+                        file_info.size as f64 / workload_stats.median_size.max(1) as f64;
+                    eprintln!(
+                        "[DEBUG] File {}: {} ({:.1} MB, {:.1}x median) → WORKER ({})",
+                        idx,
+                        file_info.path.display(),
+                        size_mb,
+                        vs_median,
+                        scenario
+                    );
                 }
 
                 system_state.inc_worker_queue(); // Track queue depth
@@ -1432,8 +1456,14 @@ where
     if debug_routing {
         eprintln!("\n[DEBUG] === Routing Summary ===");
         eprintln!("[DEBUG] Readers spawned: {}", num_readers);
-        eprintln!("[DEBUG] Files to workers: {}", routing_stats.files_to_workers);
-        eprintln!("[DEBUG] Files to readers: {}", routing_stats.files_to_readers);
+        eprintln!(
+            "[DEBUG] Files to workers: {}",
+            routing_stats.files_to_workers
+        );
+        eprintln!(
+            "[DEBUG] Files to readers: {}",
+            routing_stats.files_to_readers
+        );
         eprintln!();
     }
 
@@ -1561,12 +1591,21 @@ mod tests {
         // Uncompressed files: smaller chunks for parallelism
         assert_eq!(chunk_size_for(500 * 1024 * 1024, false), 256 * 1024);
         assert_eq!(chunk_size_for(5 * 1024 * 1024 * 1024, false), 1024 * 1024);
-        assert_eq!(chunk_size_for(50 * 1024 * 1024 * 1024, false), 4 * 1024 * 1024);
-        
+        assert_eq!(
+            chunk_size_for(50 * 1024 * 1024 * 1024, false),
+            4 * 1024 * 1024
+        );
+
         // Compressed files: larger chunks to amortize decompression
         assert_eq!(chunk_size_for(500 * 1024 * 1024, true), 4 * 1024 * 1024);
-        assert_eq!(chunk_size_for(5 * 1024 * 1024 * 1024, true), 16 * 1024 * 1024);
-        assert_eq!(chunk_size_for(50 * 1024 * 1024 * 1024, true), 32 * 1024 * 1024);
+        assert_eq!(
+            chunk_size_for(5 * 1024 * 1024 * 1024, true),
+            16 * 1024 * 1024
+        );
+        assert_eq!(
+            chunk_size_for(50 * 1024 * 1024 * 1024, true),
+            32 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -1575,8 +1614,8 @@ mod tests {
         // Expected: All files go direct to workers, 0 readers spawned
         let num_workers = 8;
         let stats = WorkloadStats {
-            median_size: 5 * 1024 * 1024 * 1024, // 5GB median
-            p95_size: 8 * 1024 * 1024 * 1024,    // 8GB P95
+            median_size: 5 * 1024 * 1024 * 1024,    // 5GB median
+            p95_size: 8 * 1024 * 1024 * 1024,       // 8GB P95
             total_bytes: 5000 * 1024 * 1024 * 1024, // 5TB total
         };
 
@@ -1587,7 +1626,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB files
-                false, // uncompressed
+                false,                  // uncompressed
                 &stats,
             );
             assert!(
@@ -1604,7 +1643,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB (not an outlier)
-                false, // uncompressed
+                false,                  // uncompressed
                 &stats,
             );
             assert!(
@@ -1621,14 +1660,14 @@ mod tests {
                 files_remaining,
                 num_workers,
                 5 * 1024 * 1024 * 1024, // 5GB = 1x median
-                false, // uncompressed
+                false,                  // uncompressed
                 &stats,
             );
             let should_chunk_large = decide_routing(
                 files_remaining,
                 num_workers,
                 12 * 1024 * 1024 * 1024, // 12GB = 2.4x median
-                false, // uncompressed
+                false,                   // uncompressed
                 &stats,
             );
             assert!(
@@ -1664,7 +1703,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 209715200, // 200MB
-                false, // uncompressed
+                false,     // uncompressed
                 &stats,
             );
             assert!(
@@ -1679,10 +1718,10 @@ mod tests {
         // file_size (600MB) > median (200MB) * 2 ✓
         // Should chunk to avoid straggler!
         let should_chunk_tarball = decide_routing(
-            1,           // Last file
+            1, // Last file
             num_workers,
-            616354689,   // ~600MB
-            false, // uncompressed
+            616354689, // ~600MB
+            false,     // uncompressed
             &stats,
         );
         assert!(
@@ -1710,7 +1749,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 120 * 1024 * 1024, // 120MB
-                false, // uncompressed
+                false,             // uncompressed
                 &stats,
             );
             // files_remaining = 5,4 (> 3) → use Scenario 3 rules
@@ -1731,7 +1770,7 @@ mod tests {
             1,
             num_workers,
             1346 * 1024 * 1024, // 1.3GB
-            false, // uncompressed
+            false,              // uncompressed
             &stats,
         );
         assert!(
@@ -1759,7 +1798,7 @@ mod tests {
             1,
             num_workers,
             100 * 1024 * 1024 * 1024, // 100GB
-            false, // uncompressed
+            false,                    // uncompressed
             &stats,
         );
 
@@ -1777,8 +1816,8 @@ mod tests {
         // Expected: All direct to workers, never chunk
         let num_workers = 16;
         let stats = WorkloadStats {
-            median_size: 1024 * 1024,      // 1MB
-            p95_size: 1024 * 1024,         // 1MB
+            median_size: 1024 * 1024,         // 1MB
+            p95_size: 1024 * 1024,            // 1MB
             total_bytes: 10000 * 1024 * 1024, // 10GB total
         };
 
@@ -1789,7 +1828,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 1024 * 1024, // 1MB
-                false, // uncompressed
+                false,       // uncompressed
                 &stats,
             );
             assert!(
@@ -1806,7 +1845,7 @@ mod tests {
         // Expected: First 33+ files direct, outlier chunks (if in moderate zone)
         let num_workers = 8;
         let stats = WorkloadStats {
-            median_size: 100 * 1024 * 1024,  // 100MB
+            median_size: 100 * 1024 * 1024, // 100MB
             p95_size: 100 * 1024 * 1024,
             total_bytes: 5000 * 1024 * 1024, // ~5GB total
         };
@@ -1818,7 +1857,7 @@ mod tests {
                 files_remaining,
                 num_workers,
                 100 * 1024 * 1024, // 100MB
-                false, // uncompressed
+                false,             // uncompressed
                 &stats,
             );
             assert!(
@@ -1836,7 +1875,7 @@ mod tests {
             25,
             num_workers,
             5 * 1024 * 1024 * 1024, // 5GB
-            false, // uncompressed
+            false,                  // uncompressed
             &stats,
         );
         assert!(
