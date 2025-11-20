@@ -1401,7 +1401,7 @@ where
                 "Scenario 4: last few files (straggler detection)"
             };
 
-            if should_chunk {
+            if should_chunk && num_readers > 0 {
                 // Route to reader pool for chunking
                 routing_stats.files_to_readers += 1;
                 routing_stats.bytes_to_readers += file_info.size;
