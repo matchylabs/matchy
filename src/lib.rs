@@ -201,16 +201,16 @@ pub use crate::serialization::{load, save};
 
 // Version information
 /// Library version string
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const MATCHY_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Library major version
-pub const VERSION_MAJOR: u32 = 0;
+pub const MATCHY_VERSION_MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
 
 /// Library minor version
-pub const VERSION_MINOR: u32 = 1;
+pub const MATCHY_VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
 
 /// Library patch version
-pub const VERSION_PATCH: u32 = 0;
+pub const MATCHY_VERSION_PATCH: &str = env!("CARGO_PKG_VERSION_PATCH");
 
 #[cfg(test)]
 mod tests {
@@ -218,8 +218,18 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(VERSION_MAJOR, 0);
-        assert_eq!(VERSION_MINOR, 1);
-        assert_eq!(VERSION_PATCH, 0);
+        // Verify version components exist and are valid
+        assert!(!MATCHY_VERSION_MAJOR.is_empty());
+        assert!(!MATCHY_VERSION_MINOR.is_empty());
+        assert!(!MATCHY_VERSION_PATCH.is_empty());
+        
+        // Verify they parse as numbers
+        assert!(MATCHY_VERSION_MAJOR.parse::<u32>().is_ok());
+        assert!(MATCHY_VERSION_MINOR.parse::<u32>().is_ok());
+        assert!(MATCHY_VERSION_PATCH.parse::<u32>().is_ok());
+        
+        // Verify full version matches format
+        let expected = format!("{}.{}.{}", MATCHY_VERSION_MAJOR, MATCHY_VERSION_MINOR, MATCHY_VERSION_PATCH);
+        assert_eq!(MATCHY_VERSION, expected);
     }
 }

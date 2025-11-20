@@ -40,16 +40,16 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 pub const MAGIC: &[u8; 8] = b"PARAGLOB";
 
 /// Current format version (v4: uses ACNodeHot for 50% memory reduction)
-pub const VERSION: u32 = 4;
+pub const MATCHY_FORMAT_VERSION: u32 = 4;
 
 /// Previous format version (v3: adds AC literal mapping for zero-copy loading)
-pub const VERSION_V3: u32 = 3;
+pub const MATCHY_FORMAT_VERSION_V3: u32 = 3;
 
 /// Previous format version (v2: adds data section support)
-pub const VERSION_V2: u32 = 2;
+pub const MATCHY_FORMAT_VERSION_V2: u32 = 2;
 
 /// Previous format version (v1: patterns only, no data)
-pub const VERSION_V1: u32 = 1;
+pub const MATCHY_FORMAT_VERSION_V1: u32 = 1;
 
 /// Main header for serialized Paraglob database (104 bytes, 4-byte aligned)
 ///
@@ -455,7 +455,7 @@ impl ParaglobHeader {
 
         Self {
             magic: *MAGIC,
-            version: VERSION,
+            version: MATCHY_FORMAT_VERSION,
             match_mode: 0,
             ac_node_count: 0,
             ac_nodes_offset: 0,
@@ -490,7 +490,7 @@ impl ParaglobHeader {
         if &self.magic != MAGIC {
             return Err("Invalid magic bytes");
         }
-        if self.version != VERSION {
+        if self.version != MATCHY_FORMAT_VERSION {
             return Err("Unsupported version - only v4 format supported");
         }
         Ok(())
@@ -794,7 +794,7 @@ mod tests {
     fn test_header_validation() {
         let mut header = ParaglobHeader::new();
         assert!(header.validate().is_ok());
-        assert_eq!(header.version, VERSION);
+        assert_eq!(header.version, MATCHY_FORMAT_VERSION);
 
         header.magic = *b"INVALID!";
         assert!(header.validate().is_err());
@@ -804,23 +804,23 @@ mod tests {
         assert!(header.validate().is_err());
 
         // Only v4 is valid
-        header.version = VERSION_V1;
+        header.version = MATCHY_FORMAT_VERSION_V1;
         assert!(header.validate().is_err());
 
-        header.version = VERSION_V2;
+        header.version = MATCHY_FORMAT_VERSION_V2;
         assert!(header.validate().is_err());
 
-        header.version = VERSION_V3;
+        header.version = MATCHY_FORMAT_VERSION_V3;
         assert!(header.validate().is_err());
 
-        header.version = VERSION;
+        header.version = MATCHY_FORMAT_VERSION;
         assert!(header.validate().is_ok());
     }
 
     #[test]
     fn test_v3_features() {
         let mut header = ParaglobHeader::new();
-        assert_eq!(header.version, VERSION);
+        assert_eq!(header.version, MATCHY_FORMAT_VERSION);
         assert!(!header.has_data_section());
         assert!(!header.has_inline_data());
         assert!(!header.has_ac_literal_mapping());
@@ -853,7 +853,7 @@ mod tests {
         // Read it back
         let read_header: ParaglobHeader = unsafe { read_struct(&buffer, 0) };
         assert_eq!(read_header.magic, *MAGIC);
-        assert_eq!(read_header.version, VERSION);
+        assert_eq!(read_header.version, MATCHY_FORMAT_VERSION);
         assert_eq!(read_header.version, 4);
     }
 

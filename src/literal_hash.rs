@@ -47,7 +47,7 @@ use xxhash_rust::xxh64::xxh64;
 pub const LITERAL_HASH_MAGIC: &[u8; 4] = b"LHSH";
 
 /// Current version of the literal hash format
-pub const LITERAL_HASH_VERSION: u32 = 1;
+pub const MATCHY_LITERAL_HASH_VERSION: u32 = 1;
 
 /// Empty slot marker
 const EMPTY_SLOT: u32 = 0xFFFFFFFF;
@@ -279,7 +279,7 @@ impl LiteralHashBuilder {
         let entry_count = final_table.iter().filter(|e| !e.is_empty()).count();
         let header = LiteralHashHeader {
             magic: *LITERAL_HASH_MAGIC,
-            version: LITERAL_HASH_VERSION,
+            version: MATCHY_LITERAL_HASH_VERSION,
             entry_count: entry_count as u32,
             table_size: table_size as u32,
             strings_offset: strings_offset as u32,
@@ -400,7 +400,7 @@ impl<'a> LiteralHash<'a> {
         }
 
         let version = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
-        if version != LITERAL_HASH_VERSION {
+        if version != MATCHY_LITERAL_HASH_VERSION {
             return Err(ParaglobError::InvalidPattern(format!(
                 "Unsupported literal hash version: {}",
                 version

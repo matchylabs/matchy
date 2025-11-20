@@ -25,7 +25,7 @@
 //! # Ok::<(), matchy::mmap::MmapError>(())
 //! ```
 
-use crate::offset_format::{ParaglobHeader, MAGIC, VERSION};
+use crate::offset_format::{ParaglobHeader, MAGIC, MATCHY_FORMAT_VERSION};
 use memmap2::Mmap;
 use std::fmt;
 use std::fs::File;
@@ -57,10 +57,10 @@ fn validate_paraglob_header(buffer: &[u8]) -> Result<&ParaglobHeader, String> {
     }
 
     // Check version
-    if header.version != VERSION {
+    if header.version != MATCHY_FORMAT_VERSION {
         return Err(format!(
             "Unsupported format version: found {}, supported {}",
-            header.version, VERSION
+            header.version, MATCHY_FORMAT_VERSION
         ));
     }
 
@@ -349,7 +349,7 @@ mod tests {
         let mmap = MmapFile::open(file.path()).expect("Failed to open valid Paraglob file");
         assert_eq!(mmap.size(), data.len());
         assert_eq!(mmap.paraglob_header().magic, *MAGIC);
-        assert_eq!(mmap.paraglob_header().version, VERSION);
+        assert_eq!(mmap.paraglob_header().version, MATCHY_FORMAT_VERSION);
     }
 
     #[test]

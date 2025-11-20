@@ -39,7 +39,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref};
 pub const AC_LITERAL_HASH_MAGIC: &[u8; 4] = b"ACLH";
 
 /// Current version of the AC literal hash format
-pub const AC_LITERAL_HASH_VERSION: u32 = 1;
+pub const MATCHY_AC_LITERAL_HASH_VERSION: u32 = 1;
 
 /// Empty slot marker
 const EMPTY_SLOT: u32 = 0xFFFFFFFF;
@@ -171,7 +171,7 @@ impl ACLiteralHashBuilder {
         // Header
         let header = ACLiteralHashHeader {
             magic: *AC_LITERAL_HASH_MAGIC,
-            version: AC_LITERAL_HASH_VERSION,
+            version: MATCHY_AC_LITERAL_HASH_VERSION,
             entry_count: self.mappings.len() as u32,
             table_size: table_size as u32,
             patterns_offset: patterns_offset as u32,
@@ -242,7 +242,7 @@ impl<'a> ACLiteralHash<'a> {
             )));
         }
 
-        if header.version != AC_LITERAL_HASH_VERSION {
+        if header.version != MATCHY_AC_LITERAL_HASH_VERSION {
             return Err(ParaglobError::InvalidPattern(format!(
                 "Unsupported AC literal hash version: {}",
                 header.version
