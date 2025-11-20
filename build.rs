@@ -45,45 +45,44 @@ fn generate_psl_phf() {
     
     writeln!(&mut file).unwrap();
     
-    // Build PHF Map: string -> index
-    // Then we can lookup the index and access ENTRY_X
-    writeln!(&mut file, "/// PHF map from PSL entry (as str) to index").unwrap();
+    // Build PHF Set using byte slice keys with phf_codegen
+    // We'll build with the actual byte content, then the PHF will work directly
+    writeln!(&mut file, "/// PHF set of PSL entries as byte slices").unwrap();
     writeln!(&mut file, "#[allow(clippy::all)]").unwrap();
-    writeln!(&mut file, "static PSL_MAP: phf::Map<&'static str, usize> = ").unwrap();
+    writeln!(&mut file, "static PSL_SUFFIXES: phf::Set<&'static [u8]> = ").unwrap();
     
-    let mut map_builder = phf_codegen::Map::new();
+    // Use phf_codegen::Set with the actual entry strings
+    // phf_codegen works with &str, and we'll convert at compile time
+    let mut set_builder = phf_codegen::Set::new();
+    for entry in &entries {
+        set_builder.entry(entry);
+    }
+    
+    // Generate the PHF code
+    let phf_code = set_builder.build().to_string();
+    
+    // Post-process: replace all string literals with ENTRY_X references
+    // For UTF-8 entries, Rust escapes them with \u{...}, so we need to handle both
+    let mut fixed_code = phf_code;
     for (idx, entry) in entries.iter().enumerate() {
-        map_builder.entry(entry, &idx.to_string());
+        // Try direct replacement first
+        let pattern = format!("\"{}\"", entry);
+        if fixed_code.contains(&pattern) {
+            fixed_code = fixed_code.replace(&pattern, &format!("ENTRY_{}", idx));
+        } else {
+            // UTF-8 entry was escaped - try escaped version
+            // Rust Debug format escapes non-ASCII, so use that
+            let escaped = format!("{:?}", entry);
+            if fixed_code.contains(&escaped) {
+                fixed_code = fixed_code.replace(&escaped, &format!("ENTRY_{}", idx));
+            } else {
+                eprintln!("Warning: Could not find entry {} in PHF code", idx);
+            }
+        }
     }
     
-    write!(&mut file, "{}", map_builder.build()).unwrap();
+    write!(&mut file, "{}", fixed_code).unwrap();
     writeln!(&mut file, ";").unwrap();
-    writeln!(&mut file).unwrap();
-    
-    // Create array of all entries for direct access
-    writeln!(&mut file, "/// Array of all PSL entries for O(1) index lookup").unwrap();
-    writeln!(&mut file, "static PSL_ENTRIES: [&[u8]; {}] = [", entries.len()).unwrap();
-    for idx in 0..entries.len() {
-        writeln!(&mut file, "    ENTRY_{},", idx).unwrap();
-    }
-    writeln!(&mut file, "];").unwrap();
-    writeln!(&mut file).unwrap();
-    
-    // Helper struct that implements contains() using the PHF map
-    writeln!(&mut file, "/// PSL lookup structure using PHF").unwrap();
-    writeln!(&mut file, "struct PslSet;").unwrap();
-    writeln!(&mut file).unwrap();
-    writeln!(&mut file, "impl PslSet {{").unwrap();
-    writeln!(&mut file, "    #[inline]").unwrap();
-    writeln!(&mut file, "    fn contains(&self, key: &[u8]) -> bool {{").unwrap();
-    writeln!(&mut file, "        // SAFETY: All PSL entries are valid UTF-8 (ASCII or punycode)").unwrap();
-    writeln!(&mut file, "        // and domain extraction only passes valid UTF-8 byte slices").unwrap();
-    writeln!(&mut file, "        let s = unsafe {{ std::str::from_utf8_unchecked(key) }};").unwrap();
-    writeln!(&mut file, "        PSL_MAP.contains_key(s)").unwrap();
-    writeln!(&mut file, "    }}").unwrap();
-    writeln!(&mut file, "}}").unwrap();
-    writeln!(&mut file).unwrap();
-    writeln!(&mut file, "static PSL_SUFFIXES: PslSet = PslSet;").unwrap();
     
     // Tell cargo to rerun if PSL changes
     println!("cargo:rerun-if-changed=src/data/public_suffix_list.dat");
