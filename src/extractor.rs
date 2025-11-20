@@ -1517,18 +1517,19 @@ const PSL_DATA: &str = include_str!("data/public_suffix_list.dat");
 /// Uses bytes instead of strings to avoid UTF-8 validation overhead
 /// Uses FxHashSet (rustc-hash) for fast non-cryptographic hashing (~3-5x faster than SipHash)
 static PSL_SUFFIXES: std::sync::LazyLock<rustc_hash::FxHashSet<&'static [u8]>> = std::sync::LazyLock::new(|| {
-    PSL_DATA
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            // Skip comments and empty lines
-            if line.is_empty() || line.starts_with("//") {
-                return None;
-            }
-            // PSL entries like "com" -> store as bytes
-            Some(line.as_bytes())
-        })
-        .collect()
+    rustc_hash::FxHashSet::from_iter(
+        PSL_DATA
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                // Skip comments and empty lines
+                if line.is_empty() || line.starts_with("//") {
+                    return None;
+                }
+                // PSL entries like "com" -> store as bytes
+                Some(line.as_bytes())
+            })
+    )
 });
 
 /// Compile-time boundary character lookup table for O(1) checking
