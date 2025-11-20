@@ -296,33 +296,44 @@ mod tests {
     fn test_cpu_bound_with_io_headroom() {
         // Scenario: Workers are busy AND I/O has headroom (should recommend more workers)
         let mut stats = ProcessingStats::new();
-        stats.worker_busy_time = Duration::from_secs_f64(15.0); // 5 workers × 3s
-        stats.worker_idle_time = Duration::from_secs_f64(0.3); // Minimal idle time
-        stats.read_time = Duration::from_secs_f64(0.5); // Light I/O
-        stats.decompress_time = Duration::from_secs_f64(0.8); // Light decompression
+        stats.worker_busy_time = Duration::from_secs_f64(6.0); // 2 workers × 3s
+        stats.worker_idle_time = Duration::from_secs_f64(0.1); // Minimal idle time
+        stats.read_time = Duration::from_secs_f64(0.3); // Light I/O
+        stats.decompress_time = Duration::from_secs_f64(0.5); // Light decompression
         stats.candidates_tested = 16_507_256;
 
         let total_time = Duration::from_secs_f64(3.0);
 
         let config = AnalysisConfig {
-            num_workers: 5,
+            num_workers: 2,
             num_files: 15,
             cache_hit_rate: 0.0,
             is_auto_tuned: true,
-            num_readers: 2,
+            num_readers: 1,
         };
 
         let analysis = analyze_performance(&stats, total_time, config);
 
-        // Should detect CPU bottleneck and recommend more threads
+        // Should detect CPU bottleneck
         assert!(matches!(
             analysis.bottleneck,
             Bottleneck::WorkerSaturated { .. }
         ));
-        assert!(analysis
+        // On machines with enough cores, should recommend more threads
+        // On constrained CI runners, may hit hardware limit instead
+        let has_thread_recommendation = analysis
             .recommendations
             .iter()
-            .any(|r| r.contains("Try --threads=") || r.contains("add more")));
+            .any(|r| r.contains("Try --threads="));
+        let at_hardware_limit = analysis
+            .recommendations
+            .iter()
+            .any(|r| r.contains("Already at") && r.contains("hardware limit"));
+        assert!(
+            has_thread_recommendation || at_hardware_limit,
+            "Expected thread recommendation or hardware limit message, got: {:?}",
+            analysis.recommendations
+        );
     }
 
     #[test]
