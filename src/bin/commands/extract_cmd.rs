@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use matchy::extractor::{ExtractedItem, Extractor};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -141,7 +141,7 @@ pub fn cmd_extract(
 
     let start_time = Instant::now();
     let mut stats = ExtractionStats::default();
-    let mut seen = if unique { Some(HashSet::new()) } else { None };
+    let mut seen = if unique { Some(FxHashSet::default()) } else { None };
 
     let stdout = io::stdout();
     let mut writer = io::BufWriter::new(stdout.lock());
@@ -210,7 +210,7 @@ fn process_file<W: Write>(
     extractor: &Extractor,
     output_format: OutputFormat,
     stats: &mut ExtractionStats,
-    seen: &mut Option<HashSet<String>>,
+    seen: &mut Option<FxHashSet<String>>,
     writer: &mut W,
     show_candidates: bool,
 ) -> Result<()> {
