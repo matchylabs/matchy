@@ -1,8 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::extractor::{Extractor, ExtractorBuilder};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use matchy::extractor::ExtractorBuilder;
+use std::hint::black_box;
 
 fn generate_text_with_domains(size: usize, domain_density: &str) -> String {
-    let domains = vec![
+    let domains = [
         "evil.example.com",
         "malware.co.uk",
         "phishing.org",
@@ -14,13 +15,25 @@ fn generate_text_with_domains(size: usize, domain_density: &str) -> String {
     ];
 
     let filler_words = vec![
-        "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
-        "hello", "world", "test", "data", "sample", "benchmark", "performance",
+        "the",
+        "quick",
+        "brown",
+        "fox",
+        "jumps",
+        "over",
+        "lazy",
+        "dog",
+        "hello",
+        "world",
+        "test",
+        "data",
+        "sample",
+        "benchmark",
+        "performance",
     ];
 
     let mut text = String::new();
     let mut word_count = 0;
-    let target_words = size / 8; // Approximate words needed
 
     match domain_density {
         "none" => {
@@ -131,8 +144,9 @@ fn bench_realistic_log_data(c: &mut Criterion) {
         .unwrap();
 
     // Realistic log line with domain
-    let log_lines = vec![
-        b"2024-11-20 10:23:45 [INFO] HTTP request to evil.example.com from 192.168.1.100".as_slice(),
+    let log_lines = [
+        b"2024-11-20 10:23:45 [INFO] HTTP request to evil.example.com from 192.168.1.100"
+            .as_slice(),
         b"2024-11-20 10:23:46 [WARN] DNS query for malware.co.uk blocked by firewall".as_slice(),
         b"2024-11-20 10:23:47 [ERROR] Connection to phishing.org timeout after 30s".as_slice(),
         b"2024-11-20 10:23:48 [INFO] Processing file data.json (size: 1024 bytes)".as_slice(),

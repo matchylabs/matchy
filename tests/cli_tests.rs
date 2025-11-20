@@ -685,8 +685,8 @@ fn test_multiple_input_files() {
 }
 
 #[test]
-fn test_json_output_includes_input_line() {
-    // Regression test: ensure JSON output includes complete input line, not empty string
+fn test_json_output_includes_match_data() {
+    // Verify JSON output includes core match fields
     let temp_dir = TempDir::new().unwrap();
     let input_file = temp_dir.path().join("ips.txt");
     let db_file = temp_dir.path().join("test.mxy");
@@ -723,26 +723,33 @@ fn test_json_output_includes_input_line() {
     let json_lines: Vec<&str> = stdout.lines().collect();
     assert!(!json_lines.is_empty(), "Expected JSON output");
 
-    // Parse the JSON and verify input_line field
+    // Parse the JSON and verify core match fields
     let json: serde_json::Value =
         serde_json::from_str(json_lines[0]).expect("Failed to parse JSON output");
 
-    let input_line = json
-        .get("input_line")
-        .expect("JSON missing 'input_line' field")
+    // Verify essential fields are present
+    let matched_text = json
+        .get("matched_text")
+        .expect("JSON missing 'matched_text' field")
         .as_str()
-        .expect("input_line should be a string");
+        .expect("matched_text should be a string");
 
-    assert!(!input_line.is_empty(), "input_line should not be empty");
-    assert_eq!(
-        input_line, test_line,
-        "input_line should contain complete line content"
+    assert_eq!(matched_text, "192.168.1.100", "Should match the IP address");
+
+    // Verify source and match_type fields
+    assert!(
+        json.get("source").is_some(),
+        "JSON should include source field"
+    );
+    assert!(
+        json.get("match_type").is_some(),
+        "JSON should include match_type field"
     );
 }
 
 #[test]
 fn test_json_output_parallel_mode() {
-    // Verify input_line is populated in parallel mode too
+    // Verify JSON output works correctly in parallel mode
     let temp_dir = TempDir::new().unwrap();
     let input_file = temp_dir.path().join("patterns.txt");
     let db_file = temp_dir.path().join("test.mxy");
@@ -788,12 +795,20 @@ fn test_json_output_parallel_mode() {
     let first_line = stdout.lines().next().unwrap();
     let json: serde_json::Value = serde_json::from_str(first_line).expect("Failed to parse JSON");
 
-    let input_line = json["input_line"].as_str().unwrap();
-    let line_number = json["line_number"].as_u64().unwrap();
-
-    assert_eq!(line_number, 2, "Should be line 2");
+    // Verify essential fields are present
+    let matched_text = json["matched_text"].as_str().unwrap();
     assert_eq!(
-        input_line, target_line,
-        "Parallel mode should also populate input_line"
+        matched_text, "bad.malware.com",
+        "Parallel mode should find the domain match"
+    );
+
+    // Verify standard output fields
+    assert!(
+        json.get("source").is_some(),
+        "JSON should include source field"
+    );
+    assert!(
+        json.get("match_type").is_some(),
+        "JSON should include match_type field"
     );
 }

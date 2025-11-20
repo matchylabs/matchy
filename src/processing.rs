@@ -1,11 +1,10 @@
 //! Batch processing infrastructure for efficient file analysis
 //!
-//! General-purpose building blocks for sequential or parallel line-oriented processing:
-//! - **LineBatch**: Pre-chunked data with computed line offsets
-//! - **LineFileReader**: Chunks files efficiently with gzip support
+//! General-purpose building blocks for sequential or parallel processing:
+//! - **DataBatch**: Pre-chunked raw byte data
+//! - **FileReader**: Chunks files efficiently with gzip support
 //! - **Worker**: Processes batches with extraction + database matching
-//! - **MatchResult**: Core match info (no file context)
-//! - **LineMatch**: Match with file/line context
+//! - **MatchResult**: Core match info with source context
 //!
 //! # Sequential Example
 //!
@@ -21,13 +20,12 @@
 //!     .add_database("threats", db)
 //!     .build();
 //!
-//! let reader = processing::LineFileReader::new("access.log.gz", 128 * 1024)?;
+//! let reader = processing::FileReader::new("access.log.gz", 128 * 1024)?;
 //! for batch in reader.batches() {
 //!     let batch = batch?;
-//!     let matches = worker.process_lines(&batch)?;
+//!     let matches = worker.process_batch(&batch)?;
 //!     for m in matches {
-//!         println!("{}:{} - {}", m.source.display(), m.line_number,
-//!                  m.match_result.matched_text);
+//!         println!("{} - {}", m.source.display(), m.matched_text);
 //!     }
 //! }
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -36,7 +34,7 @@
 //! # Parallel Example
 //!
 //! ```text
-//! Reader Thread → [LineBatch queue] → Worker Pool → [Result queue] → Output Thread
+//! Reader Thread → [DataBatch queue] → Worker Pool → [Result queue] → Output Thread
 //! ```
 //!
 //! Build your own parallel pipeline using channels and thread pools with these primitives.
@@ -154,32 +152,20 @@ pub enum WorkUnit {
     /// Pre-chunked data - worker processes directly
     Chunk {
         /// Pre-chunked batch ready for processing
-        batch: LineBatch,
+        batch: DataBatch,
     },
 }
 
-/// Pre-chunked batch of line-oriented data ready for parallel processing
-///
-/// Contains raw bytes with pre-computed newline positions to avoid
-/// duplicate memchr scans in worker threads.
+/// Pre-chunked batch of raw data ready for parallel processing
 #[derive(Clone)]
-pub struct LineBatch {
+pub struct DataBatch {
     /// Source file path
     pub source: PathBuf,
-    /// Starting line number in source file (1-indexed)
-    pub starting_line_number: usize,
     /// Raw byte data for this batch
     pub data: Arc<Vec<u8>>,
-    /// Pre-computed newline positions (offsets of '\n' bytes in data)
-    /// Workers use these to avoid re-scanning with memchr
-    pub line_offsets: Arc<Vec<usize>>,
-    /// Pre-computed word boundary positions (for hash/crypto extractors)
-    /// Only computed when needed extractors are enabled
-    /// Boundaries mark the start/end of tokens (non-boundary character runs)
-    pub word_boundaries: Option<Arc<Vec<usize>>>,
 }
 
-/// Statistics from parallel line processing
+/// Statistics from batch processing
 #[derive(Default, Clone, Debug)]
 pub struct WorkerStats {
     /// Total lines processed
@@ -188,8 +174,6 @@ pub struct WorkerStats {
     pub candidates_tested: usize,
     /// Total matches found
     pub matches_found: usize,
-    /// Lines that had at least one match
-    pub lines_with_matches: usize,
     /// Total bytes processed
     pub total_bytes: usize,
     /// Time spent extracting candidates (sampled)
@@ -226,10 +210,7 @@ pub struct WorkerStats {
     pub monero_count: usize,
 }
 
-/// Core match result without file/line context
-///
-/// General-purpose match result suitable for any processing context.
-/// Use [`LineMatch`] when you have file/line information.
+/// Match result with source context
 #[derive(Clone, Debug)]
 pub struct MatchResult {
     /// Matched text
@@ -240,42 +221,27 @@ pub struct MatchResult {
     pub result: QueryResult,
     /// Which database matched (database ID)
     pub database_id: String,
+    /// Source label (file path, "-" for stdin, or any label)
+    pub source: PathBuf,
     /// Byte offset in the input data (0-indexed)
     pub byte_offset: usize,
 }
 
-/// Match with file/line context
+/// Reads files in chunks with compression support
 ///
-/// Wraps [`MatchResult`] with source location information for line-oriented processing.
-#[derive(Clone, Debug)]
-pub struct LineMatch {
-    /// Core match result
-    pub match_result: MatchResult,
-    /// Source label (file path, "-" for stdin, or any label)
-    pub source: PathBuf,
-    /// Line number in source (1-indexed)
-    pub line_number: usize,
-    /// Full line content (for output formatting)
-    pub input_line: String,
-}
-
-/// Reads files in line-oriented chunks with compression support
-///
-/// Efficiently chunks files by reading fixed-size blocks and finding
-/// line boundaries. Pre-computes newline offsets for workers.
-///
+/// Efficiently chunks files by reading fixed-size blocks.
+/// Splits on newline boundaries to avoid breaking lines across batches.
 /// Supports gzip-compressed files via extension detection.
-pub struct LineFileReader {
+pub struct FileReader {
     source_path: PathBuf,
     reader: Box<dyn BufRead + Send>,
     read_buffer: Vec<u8>,
-    current_line_number: usize,
     eof: bool,
     leftover: Vec<u8>, // Partial line from previous read
 }
 
-impl LineFileReader {
-    /// Create a new line-oriented chunking reader
+impl FileReader {
+    /// Create a new chunking reader
     ///
     /// # Arguments
     ///
@@ -285,9 +251,9 @@ impl LineFileReader {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use matchy::processing::LineFileReader;
+    /// use matchy::processing::FileReader;
     ///
-    /// let reader = LineFileReader::new("access.log.gz", 128 * 1024)?;
+    /// let reader = FileReader::new("access.log.gz", 128 * 1024)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn new<P: AsRef<Path>>(path: P, chunk_size: usize) -> io::Result<Self> {
@@ -300,36 +266,32 @@ impl LineFileReader {
             source_path: path.to_path_buf(),
             reader,
             read_buffer: vec![0u8; chunk_size],
-            current_line_number: 1,
             eof: false,
-            // Pre-allocate leftover buffer to avoid runtime allocations
-            // Size it to handle worst case: full chunk with no newline
             leftover: Vec::with_capacity(chunk_size),
         })
     }
 
-    /// Read next batch of lines
+    /// Read next batch of data
     ///
     /// Returns `None` when EOF is reached.
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use matchy::processing::LineFileReader;
-    /// let mut reader = LineFileReader::new("data.log", 128 * 1024)?;
+    /// # use matchy::processing::FileReader;
+    /// let mut reader = FileReader::new("data.log", 128 * 1024)?;
     ///
     /// while let Some(batch) = reader.next_batch()? {
-    ///     println!("Batch has {} lines", batch.line_offsets.len());
+    ///     println!("Batch has {} bytes", batch.data.len());
     /// }
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn next_batch(&mut self) -> io::Result<Option<LineBatch>> {
+    pub fn next_batch(&mut self) -> io::Result<Option<DataBatch>> {
         if self.eof {
             return Ok(None);
         }
 
-        // Read a chunk - BufReader (128KB) underneath handles syscall batching efficiently
-        // Single read() call is actually fine since BufReader does the buffering
+        // Read a chunk - BufReader underneath handles syscall batching efficiently
         let bytes_read = self.reader.read(&mut self.read_buffer)?;
 
         if bytes_read == 0 {
@@ -337,26 +299,19 @@ impl LineFileReader {
             // Send any leftover data from previous reads
             if !self.leftover.is_empty() {
                 let chunk = std::mem::take(&mut self.leftover);
-                let line_offsets: Vec<usize> = memchr::memchr_iter(b'\n', &chunk).collect();
-                let line_count = line_offsets.len();
-                let batch = LineBatch {
+                return Ok(Some(DataBatch {
                     source: self.source_path.clone(),
-                    starting_line_number: self.current_line_number,
                     data: Arc::new(chunk),
-                    line_offsets: Arc::new(line_offsets),
-                    word_boundaries: None,
-                };
-                self.current_line_number += line_count;
-                return Ok(Some(batch));
+                }));
             }
             return Ok(None);
         }
 
-        // Combine with leftover from previous read (zero-copy ownership transfer)
+        // Combine with leftover from previous read
         let mut combined = std::mem::take(&mut self.leftover);
         combined.extend_from_slice(&self.read_buffer[..bytes_read]);
 
-        // Find last newline using memchr (SIMD-accelerated)
+        // Find last newline to split on line boundary
         let chunk_end = if let Some(pos) = memchr::memrchr(b'\n', &combined) {
             pos + 1 // Include the newline
         } else {
@@ -365,38 +320,26 @@ impl LineFileReader {
             return self.next_batch(); // Try to read more
         };
 
-        // Split at last newline using Vec::split_off (zero-copy, just adjusts pointers)
-        // This is O(1) pointer math, not O(n) memcpy
+        // Split at last newline
         let mut chunk = combined;
         if chunk_end < chunk.len() {
             self.leftover = chunk.split_off(chunk_end);
         }
         chunk.truncate(chunk_end);
 
-        // Pre-compute newline offsets (avoid duplicate memchr in workers)
-        let line_offsets: Vec<usize> = memchr::memchr_iter(b'\n', &chunk).collect();
-        let line_count = line_offsets.len();
-
-        let batch = LineBatch {
+        Ok(Some(DataBatch {
             source: self.source_path.clone(),
-            starting_line_number: self.current_line_number,
             data: Arc::new(chunk),
-            line_offsets: Arc::new(line_offsets),
-            word_boundaries: None, // Computed lazily by workers if needed
-        };
-
-        self.current_line_number += line_count;
-
-        Ok(Some(batch))
+        }))
     }
 
-    /// Returns an iterator over line batches
+    /// Returns an iterator over data batches
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use matchy::processing::LineFileReader;
-    /// let reader = LineFileReader::new("data.log", 128 * 1024)?;
+    /// # use matchy::processing::FileReader;
+    /// let reader = FileReader::new("data.log", 128 * 1024)?;
     ///
     /// for batch in reader.batches() {
     ///     let batch = batch?;
@@ -404,18 +347,18 @@ impl LineFileReader {
     /// }
     /// # Ok::<(), std::io::Error>(())
     /// ```
-    pub fn batches(self) -> LineBatchIter {
-        LineBatchIter { reader: self }
+    pub fn batches(self) -> DataBatchIter {
+        DataBatchIter { reader: self }
     }
 }
 
-/// Iterator over line batches
-pub struct LineBatchIter {
-    reader: LineFileReader,
+/// Iterator over data batches
+pub struct DataBatchIter {
+    reader: FileReader,
 }
 
-impl Iterator for LineBatchIter {
-    type Item = io::Result<LineBatch>;
+impl Iterator for DataBatchIter {
+    type Item = io::Result<DataBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.reader.next_batch() {
@@ -491,7 +434,8 @@ impl Worker {
     pub fn process_bytes(&mut self, data: &[u8]) -> Result<Vec<MatchResult>, String> {
         let mut results = Vec::new();
 
-        // Update byte count
+        // Update stats - count lines efficiently without allocating
+        self.stats.lines_processed += memchr::memchr_iter(b'\n', data).count();
         self.stats.total_bytes += data.len();
 
         // Sample timing every 1000 operations to avoid overhead
@@ -572,6 +516,7 @@ impl Worker {
                         match_type: item.item.type_name().to_string(),
                         result: query_result,
                         database_id: database_id.clone(),
+                        source: PathBuf::from(""), // Will be filled by process_batch()
                         byte_offset: item.span.0,
                     });
                 }
@@ -581,10 +526,9 @@ impl Worker {
         Ok(results)
     }
 
-    /// Process a line-oriented batch with automatic line number calculation
+    /// Process a batch with source context
     ///
-    /// Returns matches with file/line context computed automatically.
-    /// Useful for file processing where line numbers matter.
+    /// Returns matches with source path filled in.
     ///
     /// # Example
     ///
@@ -595,55 +539,25 @@ impl Worker {
     /// # let extractor = Extractor::new()?;
     /// # let mut worker = processing::Worker::builder()
     /// #     .extractor(extractor).add_database("db", db).build();
-    /// # let reader = processing::LineFileReader::new("data.log", 128*1024)?;
+    /// # let reader = processing::FileReader::new("data.log", 128*1024)?;
     /// # let batch = reader.batches().next().unwrap()?;
-    /// let matches = worker.process_lines(&batch)?;
+    /// let matches = worker.process_batch(&batch)?;
     ///
     /// for m in matches {
-    ///     println!("{}:{} - {}", m.source.display(), m.line_number,
-    ///              m.match_result.matched_text);
+    ///     println!("{} - {}", m.source.display(), m.matched_text);
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn process_lines(&mut self, batch: &LineBatch) -> Result<Vec<LineMatch>, String> {
-        // Get core match results first
-        let match_results = self.process_bytes(&batch.data)?;
+    pub fn process_batch(&mut self, batch: &DataBatch) -> Result<Vec<MatchResult>, String> {
+        // Get core match results
+        let mut match_results = self.process_bytes(&batch.data)?;
 
-        // Track which lines had matches (for statistics)
-        let mut lines_with_matches = std::collections::HashSet::new();
+        // Fill in source path for all matches
+        for m in &mut match_results {
+            m.source = batch.source.clone();
+        }
 
-        // Wrap each MatchResult with file/line context
-        let line_matches: Vec<LineMatch> = match_results
-            .into_iter()
-            .map(|match_result| {
-                // Calculate line number from byte offset
-                let newlines_before = batch
-                    .line_offsets
-                    .iter()
-                    .take_while(|&&off| off < match_result.byte_offset)
-                    .count();
-                let line_number = batch.starting_line_number + newlines_before;
-
-                lines_with_matches.insert(line_number);
-
-                // Extract the line content from batch
-                let input_line = extract_line_from_batch(batch, line_number);
-
-                LineMatch {
-                    match_result,
-                    source: batch.source.clone(),
-                    line_number,
-                    input_line,
-                }
-            })
-            .collect();
-
-        // Update line statistics
-        let line_count = batch.line_offsets.len();
-        self.stats.lines_processed += line_count;
-        self.stats.lines_with_matches += lines_with_matches.len();
-
-        Ok(line_matches)
+        Ok(match_results)
     }
 
     /// Get accumulated statistics
@@ -736,45 +650,6 @@ impl Default for WorkerBuilder {
 
 // Parallel Processing Implementation
 
-/// Extract line content from a batch given a line number
-///
-/// # Arguments
-///
-/// * `batch` - The LineBatch containing the data
-/// * `line_number` - The line number to extract (1-indexed, absolute line number)
-///
-/// # Returns
-///
-/// The line content as a String (without trailing newline)
-fn extract_line_from_batch(batch: &LineBatch, line_number: usize) -> String {
-    // Calculate which line in this batch (0-indexed within batch)
-    let batch_line_index = line_number.saturating_sub(batch.starting_line_number);
-
-    // Find the byte range for this line
-    let start_offset = if batch_line_index == 0 {
-        0
-    } else {
-        // Start after the previous line's newline
-        batch
-            .line_offsets
-            .get(batch_line_index - 1)
-            .map(|&off| off + 1)
-            .unwrap_or(0)
-    };
-
-    let end_offset = batch
-        .line_offsets
-        .get(batch_line_index)
-        .copied()
-        .unwrap_or(batch.data.len());
-
-    // Extract the line bytes and convert to string
-    let line_bytes = &batch.data[start_offset..end_offset];
-    String::from_utf8_lossy(line_bytes)
-        .trim_end_matches('\n')
-        .to_string()
-}
-
 /// Determine appropriate chunk size based on file size and compression
 ///
 /// Compressed files use larger chunks because:
@@ -816,7 +691,7 @@ fn reader_thread_chunker(file_path: PathBuf, work_sender: &Sender<WorkUnit>) -> 
         chunk_size_for(file_size, is_compressed)
     };
 
-    let mut reader = LineFileReader::new(&file_path, chunk_size)
+    let mut reader = FileReader::new(&file_path, chunk_size)
         .map_err(|e| format!("Failed to open {}: {}", file_path.display(), e))?;
 
     while let Some(batch) = reader
@@ -877,7 +752,7 @@ impl RoutingStats {
 /// Result from parallel file processing
 pub struct ParallelProcessingResult {
     /// Matches found across all files
-    pub matches: Vec<LineMatch>,
+    pub matches: Vec<MatchResult>,
     /// Statistics about how files were routed
     pub routing_stats: RoutingStats,
     /// Aggregated worker statistics
@@ -1264,7 +1139,7 @@ where
         let progress_cb = progress_callback.clone();
         let stats_map = Arc::clone(&worker_stats_map);
 
-        let handle = thread::spawn(move || -> (Vec<LineMatch>, WorkerStats) {
+        let handle = thread::spawn(move || -> (Vec<MatchResult>, WorkerStats) {
             // Create worker for this thread
             let mut worker = match factory() {
                 Ok(w) => w,
@@ -1320,7 +1195,6 @@ where
                                 agg.lines_processed += stats.lines_processed;
                                 agg.candidates_tested += stats.candidates_tested;
                                 agg.matches_found += stats.matches_found;
-                                agg.lines_with_matches += stats.lines_with_matches;
                                 agg.total_bytes += stats.total_bytes;
                                 agg.extraction_time += stats.extraction_time;
                                 agg.extraction_samples += stats.extraction_samples;
@@ -1492,7 +1366,6 @@ where
                 aggregate_stats.lines_processed += stats.lines_processed;
                 aggregate_stats.candidates_tested += stats.candidates_tested;
                 aggregate_stats.matches_found += stats.matches_found;
-                aggregate_stats.lines_with_matches += stats.lines_with_matches;
                 aggregate_stats.total_bytes += stats.total_bytes;
                 aggregate_stats.extraction_time += stats.extraction_time;
                 aggregate_stats.extraction_samples += stats.extraction_samples;
@@ -1522,11 +1395,11 @@ where
 fn process_work_unit_with_worker(
     unit: &WorkUnit,
     worker: &mut Worker,
-) -> Result<Vec<LineMatch>, String> {
+) -> Result<Vec<MatchResult>, String> {
     match unit {
         WorkUnit::WholeFile { path } => {
             // Open and process entire file
-            let mut reader = LineFileReader::new(path, 128 * 1024)
+            let mut reader = FileReader::new(path, 128 * 1024)
                 .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
 
             let mut all_matches = Vec::new();
@@ -1535,8 +1408,8 @@ fn process_work_unit_with_worker(
                 .next_batch()
                 .map_err(|e| format!("Read error in {}: {}", path.display(), e))?
             {
-                // Use Worker's process_lines method
-                let matches = worker.process_lines(&batch)?;
+                // Use Worker's process_batch method
+                let matches = worker.process_batch(&batch)?;
                 all_matches.extend(matches);
             }
 
@@ -1544,7 +1417,7 @@ fn process_work_unit_with_worker(
         }
         WorkUnit::Chunk { batch } => {
             // Process pre-chunked data directly using Worker
-            worker.process_lines(batch)
+            worker.process_batch(batch)
         }
     }
 }
@@ -1556,34 +1429,36 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_line_file_reader_basic() {
+    fn test_file_reader_basic() {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "line 1").unwrap();
         writeln!(file, "line 2").unwrap();
         writeln!(file, "line 3").unwrap();
         file.flush().unwrap();
 
-        let mut reader = LineFileReader::new(file.path(), 1024).unwrap();
+        let mut reader = FileReader::new(file.path(), 1024).unwrap();
         let batch = reader.next_batch().unwrap().unwrap();
 
-        assert_eq!(batch.starting_line_number, 1);
-        assert_eq!(batch.line_offsets.len(), 3);
+        // Verify batch contains data and source
+        assert!(!batch.data.is_empty());
+        assert_eq!(batch.source, file.path());
     }
 
     #[test]
-    fn test_line_batch_iter() {
+    fn test_batch_iter() {
         let mut file = NamedTempFile::new().unwrap();
         for i in 1..=10 {
             writeln!(file, "line {}", i).unwrap();
         }
         file.flush().unwrap();
 
-        let reader = LineFileReader::new(file.path(), 1024).unwrap();
+        let reader = FileReader::new(file.path(), 1024).unwrap();
         let batches: Vec<_> = reader.batches().collect::<io::Result<Vec<_>>>().unwrap();
 
         assert!(!batches.is_empty());
-        let total_lines: usize = batches.iter().map(|b| b.line_offsets.len()).sum();
-        assert_eq!(total_lines, 10);
+        // Verify we got data from all batches
+        let total_bytes: usize = batches.iter().map(|b| b.data.len()).sum();
+        assert!(total_bytes > 0);
     }
 
     #[test]

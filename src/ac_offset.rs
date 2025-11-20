@@ -35,7 +35,7 @@ fn prefetch_read(ptr: *const u8) {
     unsafe {
         core::arch::x86_64::_mm_prefetch(ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
     }
-    
+
     #[cfg(target_arch = "aarch64")]
     unsafe {
         // ARM64 PRFM instruction: Prefetch for Load, Keep in L1 cache
@@ -46,7 +46,7 @@ fn prefetch_read(ptr: *const u8) {
             options(nostack, preserves_flags, readonly)
         );
     }
-    
+
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         // No-op on other architectures
@@ -948,12 +948,12 @@ impl ACAutomaton {
                 // This eliminates a cache miss for 75-80% of transitions
                 if node.one_char == ch {
                     let target_offset = node.edges_offset as usize;
-                    
+
                     // OPTIMIZATION: Prefetch target node - we'll need it next
                     if target_offset < self.buffer.len() {
                         prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
                     }
-                    
+
                     Some(target_offset)
                 } else {
                     None
@@ -993,12 +993,12 @@ impl ACAutomaton {
                     let edge_slice = &self.buffer[edge_offset..];
                     let (edge_ref, _) = Ref::<_, ACEdge>::from_prefix(edge_slice).ok()?;
                     let target_offset = edge_ref.target_offset as usize;
-                    
+
                     // OPTIMIZATION: Prefetch target node - we'll need it next
                     if target_offset < self.buffer.len() {
                         prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
                     }
-                    
+
                     return Some(target_offset);
                 }
 
@@ -1025,12 +1025,12 @@ impl ACAutomaton {
 
                 if target != 0 {
                     let target_offset = target as usize;
-                    
+
                     // OPTIMIZATION: Prefetch target node - we'll need it next
                     if target_offset < self.buffer.len() {
                         prefetch_read(unsafe { self.buffer.as_ptr().add(target_offset) });
                     }
-                    
+
                     Some(target_offset)
                 } else {
                     None

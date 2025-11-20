@@ -127,12 +127,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, m) in result.matches.iter().take(5).enumerate() {
         println!(
-            "  {}. {}:{} - {} ({})",
+            "  {}. {} - {} ({})",
             i + 1,
             m.source.display(),
-            m.line_number,
-            m.match_result.matched_text,
-            m.match_result.match_type
+            m.matched_text,
+            m.match_type
         );
     }
 

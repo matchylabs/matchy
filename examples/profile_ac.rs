@@ -59,9 +59,8 @@ fn main() {
 
         let elapsed = start.elapsed();
         let avg_time = elapsed / iterations;
-        let throughput = (text.len() as f64 * iterations as f64) / elapsed.as_secs_f64()
-            / 1024.0
-            / 1024.0;
+        let throughput =
+            (text.len() as f64 * iterations as f64) / elapsed.as_secs_f64() / 1024.0 / 1024.0;
 
         println!("  Iterations: {}", iterations);
         println!("  Total time: {:?}", elapsed);
@@ -81,9 +80,7 @@ fn generate_text(size: usize, match_rate: &str, pattern_count: usize) -> String 
     match match_rate {
         "none" => {
             // Text that won't match
-            (0..size / 10)
-                .map(|i| format!("nomatch{} ", i))
-                .collect()
+            (0..size / 10).map(|i| format!("nomatch{} ", i)).collect()
         }
         "low" => {
             // ~10% matches

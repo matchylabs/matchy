@@ -507,58 +507,58 @@ impl Extractor {
     ) {
         // Strategy: Use pre-computed dots (shared with IPv4), extract domain candidates around each dot,
         // validate TLD with hash lookup (O(1) per candidate vs O(chunk_len × 16K patterns))
-        
+
         // Track last domain end to skip overlapping dots (e.g., "foo.com" has 2 dots)
         // This avoids the expensive HashSet overhead
         let mut last_domain_end = 0;
-        
+
         // Get dot iterator - either from pre-computed positions or scan now
         let dot_iter: Box<dyn Iterator<Item = usize>> = match dot_positions {
             Some(dots) => Box::new(dots.iter().copied()),
             None => Box::new(memchr::memchr_iter(b'.', chunk)),
         };
-        
+
         for dot_pos in dot_iter {
             // Skip dots inside the last domain we found
             if dot_pos < last_domain_end {
                 continue;
             }
-            
+
             // Extract domain candidate around this dot
             // Scan backwards to find domain start (word boundary or non-domain-char)
             // Scan forwards to find domain end (word boundary or non-domain-char)
-            
+
             // Find start: scan backwards from dot
             let mut start = dot_pos;
             while start > 0 && is_domain_char_fast(chunk[start - 1]) {
                 start -= 1;
             }
-            
+
             // Find end: scan forwards from dot
             let mut end = dot_pos + 1;
             while end < chunk.len() && is_domain_char_fast(chunk[end]) {
                 end += 1;
             }
-            
+
             // Must have content before and after the dot
             if start >= dot_pos || end <= dot_pos + 1 {
                 continue;
             }
-            
+
             // Extract candidate as bytes (no UTF-8 validation needed yet)
             let candidate_bytes = &chunk[start..end];
-            
+
             // Validate TLD using byte-based PSL lookup (no UTF-8 overhead!)
             let tld_start = match find_valid_tld_suffix_bytes(candidate_bytes) {
                 Some(pos) => pos,
                 None => continue, // No valid TLD found
             };
-            
+
             // Reject bare TLDs (domain must have content before the TLD)
             if tld_start == 0 {
                 continue;
             }
-            
+
             // Check word boundaries if required
             if self.require_word_boundaries {
                 // Check start boundary
@@ -570,7 +570,7 @@ impl Extractor {
                     continue;
                 }
             }
-            
+
             // Validate domain structure (label count, label format)
             let domain_span = (start, end);
             if self.is_valid_domain(chunk, domain_span) {
@@ -580,12 +580,12 @@ impl Extractor {
                     Ok(s) => s,
                     Err(_) => continue, // Invalid UTF-8, skip this domain
                 };
-                
+
                 matches.push(Match {
                     item: ExtractedItem::Domain(candidate),
                     span: domain_span,
                 });
-                
+
                 // Update last_domain_end to skip overlapping dots
                 last_domain_end = end;
             }
@@ -597,7 +597,6 @@ impl Extractor {
     fn extract_domains_internal<'a>(&'a self, line: &'a [u8], matches: &mut Vec<Match<'a>>) {
         self.extract_domains_chunk_with_dots(line, matches, None);
     }
-
 
     /// Validate an extracted domain candidate
     fn is_valid_domain(&self, line: &[u8], span: (usize, usize)) -> bool {
@@ -910,9 +909,7 @@ impl Extractor {
         // 2. Must have a valid TLD from the public suffix list
         //    This rejects IP addresses ("192.168.1.222") and fake TLDs ("Uv3.peer")
         // Use byte-based TLD validation (no UTF-8 conversion needed!)
-        if find_valid_tld_suffix_bytes(domain_part).is_none() {
-            return None; // No valid TLD found
-        }
+        find_valid_tld_suffix_bytes(domain_part)?;
 
         Some((start, end))
     }
@@ -1517,21 +1514,18 @@ const PSL_DATA: &str = include_str!("data/public_suffix_list.dat");
 /// Built once at startup from PSL_DATA for O(1) TLD validation
 /// Uses bytes instead of strings to avoid UTF-8 validation overhead
 /// Uses FxHashSet (rustc-hash) for fast non-cryptographic hashing (~3-5x faster than SipHash)
-static PSL_SUFFIXES: std::sync::LazyLock<rustc_hash::FxHashSet<&'static [u8]>> = std::sync::LazyLock::new(|| {
-    rustc_hash::FxHashSet::from_iter(
-        PSL_DATA
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                // Skip comments and empty lines
-                if line.is_empty() || line.starts_with("//") {
-                    return None;
-                }
-                // PSL entries like "com" -> store as bytes
-                Some(line.as_bytes())
-            })
-    )
-});
+static PSL_SUFFIXES: std::sync::LazyLock<rustc_hash::FxHashSet<&'static [u8]>> =
+    std::sync::LazyLock::new(|| {
+        rustc_hash::FxHashSet::from_iter(PSL_DATA.lines().filter_map(|line| {
+            let line = line.trim();
+            // Skip comments and empty lines
+            if line.is_empty() || line.starts_with("//") {
+                return None;
+            }
+            // PSL entries like "com" -> store as bytes
+            Some(line.as_bytes())
+        }))
+    });
 
 /// Compile-time boundary character lookup table for O(1) checking
 /// This replaces the branch-heavy is_word_boundary() function with a single array lookup.
@@ -1634,32 +1628,32 @@ fn is_domain_char_fast(b: u8) -> bool {
 
 /// Find the valid TLD suffix in a domain byte slice using hash-based PSL lookup
 /// Returns the byte position where the TLD starts (including the dot)
-/// 
+///
 /// Example: b"example.co.uk" -> Some(7) for b".co.uk"
 ///          b"example.com" -> Some(7) for b".com"
 ///          b"notldhere" -> None
-/// 
+///
 /// Algorithm: Walk backwards through dots, checking longest suffixes first
 /// This is correct because PSL rules require longest-match ("co.uk" before "uk")
 fn find_valid_tld_suffix_bytes(domain_bytes: &[u8]) -> Option<usize> {
     // Walk backwards through dots, building potential TLD suffixes
     // Example: b"foo.bar.co.uk"
     //   Check: b"co.uk" (yes!) -> return position of "."
-    
+
     // Use explicit reverse range for better LLVM optimization
     for i in (0..domain_bytes.len()).rev() {
         let b = domain_bytes[i];
         if b == b'.' {
             // Found a dot - check if suffix from here is in PSL
             let suffix = &domain_bytes[i + 1..]; // Skip the dot itself for PSL lookup
-            
+
             if PSL_SUFFIXES.contains(suffix) {
                 // Found valid TLD! Return position of the dot before it
                 return Some(i);
             }
         }
     }
-    
+
     // No dot or no valid TLD found
     None
 }
@@ -1735,8 +1729,7 @@ pub(crate) fn find_word_boundaries_into(chunk: &[u8], boundaries: &mut Vec<usize
 
     // Scan for transitions using ranged loop for better optimization
     // LLVM can more easily eliminate bounds checks with explicit range
-    for i in 1..chunk.len() {
-        let byte = chunk[i];
+    for (i, &byte) in chunk.iter().enumerate().skip(1) {
         let is_boundary = is_boundary_fast(byte);
 
         if in_token && is_boundary {

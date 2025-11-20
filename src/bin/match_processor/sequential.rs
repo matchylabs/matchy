@@ -154,10 +154,8 @@ pub fn process_file(
                 if output_json {
                     let mut match_obj = json!({
                         "timestamp": format!("{:.3}", timestamp),
-                        "source_file": input_path.display().to_string(),
-                        "line_number": stats.lines_processed,
+                        "source": input_path.display().to_string(),
                         "matched_text": candidate_str,
-                        "input_line": String::from_utf8_lossy(&line_buf),
                     });
 
                     // Add match-specific fields
@@ -341,10 +339,8 @@ pub fn process_file_with_aggregate(
                 if output_json {
                     let mut match_obj = json!({
                         "timestamp": format!("{:.3}", timestamp),
-                        "source_file": input_path.display().to_string(),
-                        "line_number": aggregate_stats.lines_processed,
+                        "source": input_path.display().to_string(),
                         "matched_text": candidate_str,
-                        "input_line": String::from_utf8_lossy(&line_buf),
                     });
 
                     // Add match-specific fields
@@ -397,7 +393,6 @@ pub fn process_file_with_aggregate(
 #[allow(clippy::too_many_arguments)]
 pub fn process_line_matches(
     line_buf: &[u8],
-    line_number: usize,
     input_path: &Path,
     timestamp: f64,
     db: &matchy::Database,
@@ -443,10 +438,8 @@ pub fn process_line_matches(
             if output_json {
                 let mut match_obj = json!({
                     "timestamp": format!("{:.3}", timestamp),
-                    "source_file": input_path.display().to_string(),
-                    "line_number": line_number,
+                    "source": input_path.display().to_string(),
                     "matched_text": candidate_str,
-                    "input_line": String::from_utf8_lossy(line_buf),
                 });
 
                 // Add match-specific fields

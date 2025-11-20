@@ -230,12 +230,9 @@ fn process_new_content(
     let mut stats = ProcessingStats::new();
     let output_json = output_format == "json";
 
-    // Calculate starting line number (approximate - we don't track across follow sessions)
-    let starting_line = 1usize;
-
     // Read new lines
     let reader = BufReader::new(file);
-    for (line_offset, line_result) in reader.lines().enumerate() {
+    for line_result in reader.lines() {
         let line = line_result?;
         let line_bytes = line.as_bytes();
 
@@ -255,7 +252,6 @@ fn process_new_content(
         // Process this line
         process_line_matches(
             line_bytes,
-            starting_line + line_offset,
             input_path,
             timestamp,
             db,
@@ -297,7 +293,7 @@ pub fn follow_files_parallel(
     let result_queue_capacity = 1000;
 
     let (work_tx, work_rx) =
-        mpsc::sync_channel::<Option<super::parallel::LineBatch>>(work_queue_capacity);
+        mpsc::sync_channel::<Option<super::parallel::DataBatch>>(work_queue_capacity);
     let (result_tx, result_rx) =
         mpsc::sync_channel::<Option<super::parallel::WorkerMessage>>(result_queue_capacity);
 
@@ -376,7 +372,6 @@ pub fn follow_files_parallel(
         aggregate.lines_processed += stats.lines_processed;
         aggregate.candidates_tested += stats.candidates_tested;
         aggregate.total_matches += stats.matches_found; // Library uses matches_found
-        aggregate.lines_with_matches += stats.lines_with_matches;
         aggregate.total_bytes += stats.total_bytes;
         aggregate.ipv4_count += stats.ipv4_count;
         aggregate.ipv6_count += stats.ipv6_count;
@@ -392,7 +387,7 @@ pub fn follow_files_parallel(
 /// Reader/watcher thread: watches files, reads new content, batches and sends to workers
 fn reader_watcher_thread(
     inputs: Vec<PathBuf>,
-    work_tx: SyncSender<Option<super::parallel::LineBatch>>,
+    work_tx: SyncSender<Option<super::parallel::DataBatch>>,
     _overall_start: Instant,
     shutdown: Arc<AtomicBool>,
     show_stats: bool,
@@ -403,7 +398,6 @@ fn reader_watcher_thread(
     }
 
     let mut file_positions: HashMap<PathBuf, u64> = HashMap::new();
-    let mut line_counters: HashMap<PathBuf, usize> = HashMap::new();
 
     for input_path in &inputs {
         // Read existing content and send as initial batch
@@ -415,22 +409,11 @@ fn reader_watcher_thread(
                     let mut content = Vec::new();
                     if let Ok(mut f) = File::open(input_path) {
                         if f.read_to_end(&mut content).is_ok() {
-                            // Pre-compute line offsets for workers
-                            let line_offsets: Vec<usize> =
-                                memchr::memchr_iter(b'\n', &content).collect();
-                            let line_count = line_offsets.len();
-
-                            let batch = super::parallel::LineBatch {
+                            let batch = super::parallel::DataBatch {
                                 source: input_path.clone(),
-                                starting_line_number: 1,
-                                data: Arc::new(content.clone()),
-                                line_offsets: Arc::new(line_offsets),
-                                word_boundaries: None,
+                                data: Arc::new(content),
                             };
                             let _ = work_tx.send(Some(batch));
-
-                            // Count lines for tracking
-                            line_counters.insert(input_path.clone(), line_count + 1);
                         }
                     }
                 }
@@ -458,12 +441,7 @@ fn reader_watcher_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
-                handle_file_event_parallel(
-                    event,
-                    &mut file_positions,
-                    &mut line_counters,
-                    &work_tx,
-                )?;
+                handle_file_event_parallel(event, &mut file_positions, &work_tx)?;
             }
             Ok(Err(e)) => {
                 eprintln!("[WARN] File watcher error: {}", e);
@@ -487,7 +465,7 @@ fn reader_watcher_thread(
 /// Worker thread for follow mode - same as parallel but can be interrupted
 fn worker_thread_follow(
     worker_id: usize,
-    work_rx: Arc<Mutex<Receiver<Option<super::parallel::LineBatch>>>>,
+    work_rx: Arc<Mutex<Receiver<Option<super::parallel::DataBatch>>>>,
     result_tx: SyncSender<Option<super::parallel::WorkerMessage>>,
     database_path: PathBuf,
     cache_size: usize,
@@ -543,8 +521,8 @@ fn worker_thread_follow(
 
         match batch_opt {
             Ok(Some(batch)) => {
-                // Process batch using library worker (batch is already LineBatch)
-                match worker.process_lines(&batch) {
+                // Process batch using library worker
+                match worker.process_batch(&batch) {
                     Ok(matches) => {
                         // Convert library matches to CLI format and send
                         for m in matches {
@@ -620,10 +598,8 @@ fn output_thread_follow(
                         if output_json {
                             let mut match_obj = json!({
                                 "timestamp": format!("{:.3}", result.timestamp),
-                                "source_file": result.source_file.display().to_string(),
-                                "line_number": result.line_number,
+                                "source": result.source_file.display().to_string(),
                                 "matched_text": result.matched_text,
-                                "input_line": result.input_line,
                                 "match_type": result.match_type,
                             });
 
@@ -645,8 +621,7 @@ fn output_thread_follow(
                             }
                         }
 
-                        stats.lines_with_matches += 1;
-                        stats.total_bytes += result.input_line.len();
+                        stats.total_matches += 1;
                     }
                     WorkerMessage::Stats {
                         worker_id,
@@ -661,7 +636,6 @@ fn output_thread_follow(
                             aggregate.lines_processed += stats.lines_processed;
                             aggregate.candidates_tested += stats.candidates_tested;
                             aggregate.total_matches += stats.matches_found; // Library uses matches_found
-                            aggregate.lines_with_matches += stats.lines_with_matches;
                             aggregate.total_bytes += stats.total_bytes;
                             aggregate.ipv4_count += stats.ipv4_count;
                             aggregate.ipv6_count += stats.ipv6_count;
@@ -705,8 +679,7 @@ fn output_thread_follow(
 fn handle_file_event_parallel(
     event: Event,
     file_positions: &mut HashMap<PathBuf, u64>,
-    line_counters: &mut HashMap<PathBuf, usize>,
-    work_tx: &SyncSender<Option<super::parallel::LineBatch>>,
+    work_tx: &SyncSender<Option<super::parallel::DataBatch>>,
 ) -> Result<()> {
     match event.kind {
         EventKind::Modify(_) | EventKind::Create(_) => {
@@ -718,7 +691,6 @@ fn handle_file_event_parallel(
                             // Check for truncation (log rotation)
                             if current_size < *last_pos {
                                 *last_pos = 0;
-                                line_counters.insert(path.clone(), 1);
                             }
 
                             if current_size > *last_pos {
@@ -728,26 +700,14 @@ fn handle_file_event_parallel(
                                     if file.read_to_end(&mut new_content).is_ok()
                                         && !new_content.is_empty()
                                     {
-                                        let starting_line =
-                                            line_counters.get(path).copied().unwrap_or(1);
-
-                                        // Pre-compute line offsets for workers
-                                        let line_offsets: Vec<usize> =
-                                            memchr::memchr_iter(b'\n', &new_content).collect();
-                                        let new_lines = line_offsets.len();
-
-                                        let batch = super::parallel::LineBatch {
+                                        let batch = super::parallel::DataBatch {
                                             source: path.clone(),
-                                            starting_line_number: starting_line,
-                                            data: Arc::new(new_content.clone()),
-                                            line_offsets: Arc::new(line_offsets),
-                                            word_boundaries: None,
+                                            data: Arc::new(new_content),
                                         };
                                         let _ = work_tx.send(Some(batch));
 
-                                        // Update position and line counter
+                                        // Update position
                                         *last_pos = current_size;
-                                        *line_counters.get_mut(path).unwrap() += new_lines;
                                     }
                                 }
                             }

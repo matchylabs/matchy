@@ -78,8 +78,8 @@ impl ExtractorConfig {
     }
 }
 
-// Use library's LineBatch directly instead of maintaining duplicate WorkBatch
-pub use matchy::processing::LineBatch;
+// Use library's DataBatch directly instead of maintaining duplicate WorkBatch
+pub use matchy::processing::DataBatch;
 
 /// Auto-tune worker count based on available CPU cores
 /// Reader count is determined dynamically by the library based on workload simulation
@@ -91,12 +91,10 @@ fn auto_tune_worker_count() -> usize {
 }
 
 /// Match result sent from workers to output thread
-pub struct MatchResult {
+pub struct CliMatchResult {
     pub source_file: PathBuf,
-    pub line_number: usize,
     pub matched_text: String,
     pub match_type: String,
-    pub input_line: String,
     pub timestamp: f64,
     // Optional fields for different match types
     pub pattern_count: Option<usize>,
@@ -217,7 +215,6 @@ pub fn process_parallel(
     aggregate.lines_processed = result.worker_stats.lines_processed;
     aggregate.candidates_tested = result.worker_stats.candidates_tested;
     aggregate.total_matches = result.worker_stats.matches_found;
-    aggregate.lines_with_matches = result.worker_stats.lines_with_matches;
     aggregate.total_bytes = result.worker_stats.total_bytes;
     aggregate.extraction_time = result.worker_stats.extraction_time;
     aggregate.extraction_samples = result.worker_stats.extraction_samples;
@@ -238,7 +235,7 @@ pub fn process_parallel(
 
 /// Message from worker to output thread
 pub enum WorkerMessage {
-    Match(MatchResult),
+    Match(CliMatchResult),
     Stats {
         worker_id: usize,
         stats: WorkerStats,
@@ -314,23 +311,21 @@ impl MatchBuffers {
     }
 }
 
-/// Convert library LineMatch to CLI MatchResult
-fn library_match_to_cli_match(lib_match: &matchy::processing::LineMatch) -> Option<MatchResult> {
+/// Convert library MatchResult to CLI CliMatchResult
+fn library_match_to_cli_match(
+    lib_match: &matchy::processing::MatchResult,
+) -> Option<CliMatchResult> {
     use matchy::QueryResult;
 
-    let mr = &lib_match.match_result;
-
-    match &mr.result {
+    match &lib_match.result {
         QueryResult::Ip { data, prefix_len } => {
             let mut cidr = String::new();
-            format_cidr_into(&mr.matched_text, *prefix_len, &mut cidr);
+            format_cidr_into(&lib_match.matched_text, *prefix_len, &mut cidr);
 
-            Some(MatchResult {
+            Some(CliMatchResult {
                 source_file: lib_match.source.clone(),
-                line_number: lib_match.line_number,
-                matched_text: mr.matched_text.clone(),
+                matched_text: lib_match.matched_text.clone(),
                 match_type: "ip".to_string(),
-                input_line: lib_match.input_line.clone(),
                 timestamp: 0.0,
                 pattern_count: None,
                 data: Some(data_value_to_json(data)),
@@ -344,12 +339,10 @@ fn library_match_to_cli_match(lib_match: &matchy::processing::LineMatch) -> Opti
                 .filter_map(|opt_dv| opt_dv.as_ref().map(data_value_to_json))
                 .collect();
 
-            Some(MatchResult {
+            Some(CliMatchResult {
                 source_file: lib_match.source.clone(),
-                line_number: lib_match.line_number,
-                matched_text: mr.matched_text.clone(),
+                matched_text: lib_match.matched_text.clone(),
                 match_type: "pattern".to_string(),
-                input_line: lib_match.input_line.clone(),
                 timestamp: 0.0,
                 pattern_count: Some(pattern_ids.len()),
                 data: if data_values.is_empty() {
@@ -366,14 +359,12 @@ fn library_match_to_cli_match(lib_match: &matchy::processing::LineMatch) -> Opti
 }
 
 /// Output a CLI match result
-fn output_cli_match(result: &MatchResult, output_json: bool) -> Result<()> {
+fn output_cli_match(result: &CliMatchResult, output_json: bool) -> Result<()> {
     if output_json {
         let mut match_obj = json!({
             "timestamp": format!("{:.3}", result.timestamp),
-            "source_file": result.source_file.display().to_string(),
-            "line_number": result.line_number,
+            "source": result.source_file.display().to_string(),
             "matched_text": result.matched_text,
-            "input_line": result.input_line,
             "match_type": result.match_type,
         });
 
@@ -397,9 +388,9 @@ fn output_cli_match(result: &MatchResult, output_json: bool) -> Result<()> {
 
 /// Build CLI match result from library match
 pub fn build_match_result(
-    lib_match: &matchy::processing::LineMatch,
+    lib_match: &matchy::processing::MatchResult,
     match_buffers: &mut MatchBuffers,
-) -> Option<MatchResult> {
+) -> Option<CliMatchResult> {
     use matchy::QueryResult;
 
     // Reset buffers
@@ -407,20 +398,19 @@ pub fn build_match_result(
     match_buffers.matched_text.clear();
     match_buffers.cidr.clear();
 
-    // Access the nested match_result
-    let mr = &lib_match.match_result;
-
     // Build match result based on query result type
-    match &mr.result {
+    match &lib_match.result {
         QueryResult::Ip { data, prefix_len } => {
-            format_cidr_into(&mr.matched_text, *prefix_len, &mut match_buffers.cidr);
+            format_cidr_into(
+                &lib_match.matched_text,
+                *prefix_len,
+                &mut match_buffers.cidr,
+            );
 
-            Some(MatchResult {
+            Some(CliMatchResult {
                 source_file: lib_match.source.clone(),
-                line_number: lib_match.line_number,
-                matched_text: mr.matched_text.clone(),
+                matched_text: lib_match.matched_text.clone(),
                 match_type: "ip".to_string(),
-                input_line: lib_match.input_line.clone(),
                 timestamp: 0.0, // Will be filled by caller
                 pattern_count: None,
                 data: Some(data_value_to_json(data)),
@@ -434,12 +424,10 @@ pub fn build_match_result(
                 .filter_map(|opt_dv| opt_dv.as_ref().map(data_value_to_json))
                 .collect();
 
-            Some(MatchResult {
+            Some(CliMatchResult {
                 source_file: lib_match.source.clone(),
-                line_number: lib_match.line_number,
-                matched_text: mr.matched_text.clone(),
+                matched_text: lib_match.matched_text.clone(),
                 match_type: "pattern".to_string(),
-                input_line: lib_match.input_line.clone(),
                 timestamp: 0.0,
                 pattern_count: Some(pattern_ids.len()),
                 data: if data_values.is_empty() {

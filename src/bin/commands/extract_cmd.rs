@@ -141,7 +141,11 @@ pub fn cmd_extract(
 
     let start_time = Instant::now();
     let mut stats = ExtractionStats::default();
-    let mut seen = if unique { Some(FxHashSet::default()) } else { None };
+    let mut seen = if unique {
+        Some(FxHashSet::default())
+    } else {
+        None
+    };
 
     let stdout = io::stdout();
     let mut writer = io::BufWriter::new(stdout.lock());

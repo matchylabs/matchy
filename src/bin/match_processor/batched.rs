@@ -341,10 +341,8 @@ fn output_match_json(
     
     let mut match_obj = json!({
         "timestamp": format!("{:.3}", timestamp),
-        "source_file": input_path.display().to_string(),
-        "line_number": line_number,
+        "source": input_path.display().to_string(),
         "matched_text": candidate_str,
-        "input_line": input_line,
     });
 
     match result {
