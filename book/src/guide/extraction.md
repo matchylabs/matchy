@@ -49,8 +49,8 @@ for match_item in extractor.extract_from_line(line) {
 ```
 
 **Features:**
-- **TLD validation**: 3.6M+ real TLDs from Public Suffix List
-- **Unicode support**: Handles münchen.de, café.fr (with punycode)
+- **TLD validation**: 10K+ real TLDs from Public Suffix List
+- **Unicode support**: Handles münchen.de, café.fr (both UTF-8 and punycode)
 - **Subdomain extraction**: Extracts full domain from URLs
 - **Word boundaries**: Avoids false positives in non-domain text
 

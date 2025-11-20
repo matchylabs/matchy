@@ -506,13 +506,12 @@ impl Extractor {
         matches: &mut Vec<Match<'a>>,
         dot_positions: Option<&[usize]>,
     ) {
-        use std::collections::HashSet;
-
         // Strategy: Use pre-computed dots (shared with IPv4), extract domain candidates around each dot,
         // validate TLD with hash lookup (O(1) per candidate vs O(chunk_len × 16K patterns))
         
-        // Track seen domains to avoid duplicates (e.g., "foo.com" might be found from multiple dots)
-        let mut seen_domains = HashSet::new();
+        // Track last domain end to skip overlapping dots (e.g., "foo.com" has 2 dots)
+        // This avoids the expensive HashSet overhead
+        let mut last_domain_end = 0;
         
         // Get dot iterator - either from pre-computed positions or scan now
         let dot_iter: Box<dyn Iterator<Item = usize>> = match dot_positions {
@@ -521,6 +520,11 @@ impl Extractor {
         };
         
         for dot_pos in dot_iter {
+            // Skip dots inside the last domain we found
+            if dot_pos < last_domain_end {
+                continue;
+            }
+            
             // Extract domain candidate around this dot
             // Scan backwards to find domain start (word boundary or non-domain-char)
             // Scan forwards to find domain end (word boundary or non-domain-char)
@@ -542,17 +546,12 @@ impl Extractor {
                 continue;
             }
             
-            // Validate UTF-8 on the candidate
+            // Validate UTF-8 on the candidate (defer until we know it might be valid)
             let candidate_bytes = &chunk[start..end];
             let candidate = match std::str::from_utf8(candidate_bytes) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            
-            // Check if we've already seen this exact domain span
-            if !seen_domains.insert((start, end)) {
-                continue; // Already processed this domain
-            }
             
             // Validate TLD using hash-based PSL lookup
             let tld_start = match find_valid_tld_suffix(candidate) {
@@ -584,6 +583,9 @@ impl Extractor {
                     item: ExtractedItem::Domain(candidate),
                     span: domain_span,
                 });
+                
+                // Update last_domain_end to skip overlapping dots
+                last_domain_end = end;
             }
         }
     }

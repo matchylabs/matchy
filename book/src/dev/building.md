@@ -90,26 +90,29 @@ Matchy includes development-only tools in the `examples/` directory that are not
 
 ### Updating the Public Suffix List
 
-The TLD matching feature uses a pre-built Aho-Corasick automaton generated from the [Public Suffix List](https://publicsuffix.org). To refresh this data:
+The TLD matching feature uses a hash-based lookup table built from the [Public Suffix List](https://publicsuffix.org). To refresh this data:
 
 ```bash
-# Download latest PSL and rebuild the automaton
+# Download latest PSL and generate punycode versions
 cd tools/update-psl
 cargo run
 
-# Commit the updated automaton
+# Verify everything works
 cd ../..
-git add src/data/tld_automaton.ac
+cargo test
+
+# Commit the updated data
+git add src/data/public_suffix_list.dat
 git commit -m "Update Public Suffix List"
 ```
 
-This tool:
+The update tool:
 - Downloads the latest PSL from publicsuffix.org
-- Parses TLD patterns including wildcards
-- Handles Unicode TLDs with punycode conversion
-- Rebuilds `src/data/tld_automaton.ac`
+- Generates punycode versions of non-ASCII entries (e.g., "公司.cn" → "xn--55qx5d.cn")
+- Saves both UTF-8 and punycode versions to `src/data/public_suffix_list.dat`
+- This ensures domains work whether logs contain UTF-8 or punycode
 
-**Note:** This is only needed when updating TLD patterns. End users never need to run this.
+**Note:** This is only needed when updating TLD patterns. The PSL data is embedded at compile time, so end users never need to run this.
 
 ## See Also
 
