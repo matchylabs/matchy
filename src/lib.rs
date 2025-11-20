@@ -218,18 +218,16 @@ mod tests {
 
     #[test]
     fn test_version() {
-        // Verify version components exist and are valid
-        assert!(!MATCHY_VERSION_MAJOR.is_empty());
-        assert!(!MATCHY_VERSION_MINOR.is_empty());
-        assert!(!MATCHY_VERSION_PATCH.is_empty());
-        
-        // Verify they parse as numbers
+        // Verify version components parse as valid numbers
         assert!(MATCHY_VERSION_MAJOR.parse::<u32>().is_ok());
         assert!(MATCHY_VERSION_MINOR.parse::<u32>().is_ok());
         assert!(MATCHY_VERSION_PATCH.parse::<u32>().is_ok());
-        
+
         // Verify full version matches format
-        let expected = format!("{}.{}.{}", MATCHY_VERSION_MAJOR, MATCHY_VERSION_MINOR, MATCHY_VERSION_PATCH);
+        let expected = format!(
+            "{}.{}.{}",
+            MATCHY_VERSION_MAJOR, MATCHY_VERSION_MINOR, MATCHY_VERSION_PATCH
+        );
         assert_eq!(MATCHY_VERSION, expected);
     }
 }

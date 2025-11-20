@@ -38,7 +38,8 @@
 use crate::error::{ParaglobError, Result};
 use crate::offset_format::{
     ACEdge, ACNodeHot, MetaWordMapping, ParaglobHeader, PatternDataMapping, PatternEntry,
-    StateKind, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1, MATCHY_FORMAT_VERSION_V2, MATCHY_FORMAT_VERSION_V3,
+    StateKind, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1, MATCHY_FORMAT_VERSION_V2,
+    MATCHY_FORMAT_VERSION_V3,
 };
 use std::collections::HashSet;
 use std::fs::File;
