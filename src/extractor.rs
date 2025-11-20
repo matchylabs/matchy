@@ -398,9 +398,10 @@ impl Extractor {
         };
         let boundaries_ref = boundaries.as_deref().map(|v| &**v);
 
-        // Pre-compute dot positions once if IPv4 or domain extraction is enabled
-        // Avoids duplicate memchr scans when both extractors are active
-        let dot_positions = if self.extract_ipv4 || self.extract_domains {
+        // Pre-compute dot positions only if BOTH IPv4 and domain extraction are enabled
+        // Otherwise, use lazy iteration to avoid collecting all dots upfront
+        let dot_positions = if self.extract_ipv4 && self.extract_domains {
+            // Both extractors need dots - collect once and share
             let mut buf = self.dot_positions_buffer.borrow_mut();
             buf.clear();
             buf.extend(memchr::memchr_iter(b'.', chunk));
