@@ -1645,7 +1645,9 @@ fn find_valid_tld_suffix_bytes(domain_bytes: &[u8]) -> Option<usize> {
     // Example: b"foo.bar.co.uk"
     //   Check: b"co.uk" (yes!) -> return position of "."
     
-    for (i, &b) in domain_bytes.iter().enumerate().rev() {
+    // Use explicit reverse range for better LLVM optimization
+    for i in (0..domain_bytes.len()).rev() {
+        let b = domain_bytes[i];
         if b == b'.' {
             // Found a dot - check if suffix from here is in PSL
             let suffix = &domain_bytes[i + 1..]; // Skip the dot itself for PSL lookup
