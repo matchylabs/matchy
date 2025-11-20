@@ -147,3 +147,8 @@ harness = false
 name = "query_profile"
 path = "benches/query_profile.rs"
 harness = false
+
+# Extractor performance benchmark (domain/email/IP extraction)
+[[bench]]
+name = "extractor_bench"
+harness = false

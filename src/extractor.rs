@@ -8,6 +8,8 @@ use crate::error::ParaglobError;
 use crate::glob::MatchMode;
 use crate::paraglob_offset::Paraglob;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::collections::HashSet;
+use std::sync::LazyLock;
 
 /// Builder for Extractor
 pub struct ExtractorBuilder {
@@ -138,6 +140,7 @@ impl ExtractorBuilder {
             double_colon_finder,
             ox_finder,
             boundaries_buffer: std::cell::RefCell::new(Vec::new()),
+            dot_positions_buffer: std::cell::RefCell::new(Vec::new()),
         })
     }
 }
@@ -357,6 +360,8 @@ pub struct Extractor {
     ox_finder: memchr::memmem::Finder<'static>,
     /// Reusable buffer for word boundaries (reduced allocations)
     boundaries_buffer: std::cell::RefCell<Vec<usize>>,
+    /// Reusable buffer for dot positions (shared by IPv4 and domain extraction)
+    dot_positions_buffer: std::cell::RefCell<Vec<usize>>,
 }
 
 impl Extractor {
@@ -415,14 +420,26 @@ impl Extractor {
         };
         let boundaries_ref = boundaries.as_deref().map(|v| &**v);
 
+        // Pre-compute dot positions once if IPv4 or domain extraction is enabled
+        // Avoids duplicate memchr scans when both extractors are active
+        let dot_positions = if self.extract_ipv4 || self.extract_domains {
+            let mut buf = self.dot_positions_buffer.borrow_mut();
+            buf.clear();
+            buf.extend(memchr::memchr_iter(b'.', chunk));
+            Some(buf)
+        } else {
+            None
+        };
+        let dots_ref = dot_positions.as_deref().map(|v| &**v);
+
         // Extract IPv6 (::) in one pass over entire chunk
         if self.extract_ipv6 {
             self.extract_ipv6_chunk(chunk, &mut matches);
         }
 
-        // Extract IPv4 (.) in one pass
+        // Extract IPv4 (.) in one pass using pre-computed dot positions
         if self.extract_ipv4 {
-            self.extract_ipv4_chunk(chunk, &mut matches);
+            self.extract_ipv4_chunk_with_dots(chunk, &mut matches, dots_ref);
         }
 
         // Extract emails (@) in one pass
@@ -430,9 +447,9 @@ impl Extractor {
             self.extract_emails_chunk(chunk, &mut matches);
         }
 
-        // Extract domains from entire chunk in one pass
+        // Extract domains from entire chunk in one pass using pre-computed dot positions
         if self.extract_domains {
-            self.extract_domains_chunk(chunk, &mut matches);
+            self.extract_domains_chunk_with_dots(chunk, &mut matches, dots_ref);
         }
 
         // Extract hashes using pre-computed boundaries
@@ -501,57 +518,92 @@ impl Extractor {
         self.min_domain_labels
     }
 
-    /// Extract domains from entire chunk in one pass
-    fn extract_domains_chunk<'a>(&'a self, chunk: &'a [u8], matches: &mut Vec<Match<'a>>) {
-        use memchr::memchr;
+    /// Extract domains from entire chunk in one pass using hash-based PSL validation
+    /// Uses pre-computed dot positions if provided, otherwise scans for dots
+    fn extract_domains_chunk_with_dots<'a>(
+        &'a self,
+        chunk: &'a [u8],
+        matches: &mut Vec<Match<'a>>,
+        dot_positions: Option<&[usize]>,
+    ) {
+        use std::collections::HashSet;
 
-        let tld_matcher = match self.tld_matcher.as_ref() {
-            Some(m) => m,
-            None => return,
+        // Strategy: Use pre-computed dots (shared with IPv4), extract domain candidates around each dot,
+        // validate TLD with hash lookup (O(1) per candidate vs O(chunk_len × 16K patterns))
+        
+        // Track seen domains to avoid duplicates (e.g., "foo.com" might be found from multiple dots)
+        let mut seen_domains = HashSet::new();
+        
+        // Get dot iterator - either from pre-computed positions or scan now
+        let dot_iter: Box<dyn Iterator<Item = usize>> = match dot_positions {
+            Some(dots) => Box::new(dots.iter().copied()),
+            None => Box::new(memchr::memchr_iter(b'.', chunk)),
         };
-
-        // Quick pre-filter: skip if no dots at all (domains need at least one)
-        if memchr(b'.', chunk).is_none() {
-            return;
-        }
-
-        // Find all TLD suffix matches with positions using byte-based matching
-        // Allocate buffer once for entire chunk (not per-line)
-        let mut tld_buffer = Vec::new();
-        tld_matcher.find_matches_with_positions_bytes_into(chunk, &mut tld_buffer);
-
-        for &(tld_end, _pattern_id) in tld_buffer.iter() {
-            // e.g., "evil.example.com" with ".com" match gives tld_end = 18
-
-            // Fast boundary check: TLD must be followed by non-domain char or end of chunk
-            // This rejects false positives like "blah.community" (.com matches but continues)
-            if tld_end < chunk.len() && is_domain_char(chunk[tld_end]) {
-                continue; // TLD continues with domain chars - not a real TLD boundary
+        
+        for dot_pos in dot_iter {
+            // Extract domain candidate around this dot
+            // Scan backwards to find domain start (word boundary or non-domain-char)
+            // Scan forwards to find domain end (word boundary or non-domain-char)
+            
+            // Find start: scan backwards from dot
+            let mut start = dot_pos;
+            while start > 0 && is_domain_char_fast(chunk[start - 1]) {
+                start -= 1;
             }
-
-            // Expand backwards to find domain start
-            if let Some(domain_span) = self.expand_domain_backwards(chunk, tld_end) {
-                let domain_bytes = &chunk[domain_span.0..domain_span.1];
-
-                // Validate UTF-8 only on the domain candidate (not the whole chunk!)
-                let domain_str = match std::str::from_utf8(domain_bytes) {
-                    Ok(s) => s,
-                    Err(_) => continue, // Invalid UTF-8 in domain - skip
-                };
-
-                // Reject bare TLDs (e.g., ".app", ".com")
-                // A valid domain must have at least one label before the TLD
-                if domain_bytes[0] == b'.' {
+            
+            // Find end: scan forwards from dot
+            let mut end = dot_pos + 1;
+            while end < chunk.len() && is_domain_char_fast(chunk[end]) {
+                end += 1;
+            }
+            
+            // Must have content before and after the dot
+            if start >= dot_pos || end <= dot_pos + 1 {
+                continue;
+            }
+            
+            // Validate UTF-8 on the candidate
+            let candidate_bytes = &chunk[start..end];
+            let candidate = match std::str::from_utf8(candidate_bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            
+            // Check if we've already seen this exact domain span
+            if !seen_domains.insert((start, end)) {
+                continue; // Already processed this domain
+            }
+            
+            // Validate TLD using hash-based PSL lookup
+            let tld_start = match find_valid_tld_suffix(candidate) {
+                Some(pos) => pos,
+                None => continue, // No valid TLD found
+            };
+            
+            // Reject bare TLDs (domain must have content before the TLD)
+            if tld_start == 0 {
+                continue;
+            }
+            
+            // Check word boundaries if required
+            if self.require_word_boundaries {
+                // Check start boundary
+                if start > 0 && !is_boundary_fast(chunk[start - 1]) {
                     continue;
                 }
-
-                // Validate the extracted domain (label checks, etc.)
-                if self.is_valid_domain(chunk, domain_span) {
-                    matches.push(Match {
-                        item: ExtractedItem::Domain(domain_str),
-                        span: domain_span,
-                    });
+                // Check end boundary
+                if end < chunk.len() && !is_boundary_fast(chunk[end]) {
+                    continue;
                 }
+            }
+            
+            // Validate domain structure (label count, label format)
+            let domain_span = (start, end);
+            if self.is_valid_domain(chunk, domain_span) {
+                matches.push(Match {
+                    item: ExtractedItem::Domain(candidate),
+                    span: domain_span,
+                });
             }
         }
     }
@@ -559,47 +611,9 @@ impl Extractor {
     /// Extract domains from a single line (for line-by-line processing)
     /// Delegates to chunk-based implementation since spans are compatible
     fn extract_domains_internal<'a>(&'a self, line: &'a [u8], matches: &mut Vec<Match<'a>>) {
-        self.extract_domains_chunk(line, matches);
+        self.extract_domains_chunk_with_dots(line, matches, None);
     }
 
-    /// Expand backwards from TLD end to find domain start using fast lookup table
-    /// Scans backwards using branch-free boundary detection for optimal performance
-    fn expand_domain_backwards(&self, line: &[u8], tld_end: usize) -> Option<(usize, usize)> {
-        if tld_end == 0 {
-            return None;
-        }
-
-        // DNS standard max length is 253 chars; use this as scan limit
-        const MAX_DOMAIN_LEN: usize = 253;
-        let scan_limit = tld_end.saturating_sub(MAX_DOMAIN_LEN);
-        let mut start = tld_end;
-
-        // OPTIMIZED: Single pass with whitelist lookup table
-        // Only accept valid domain characters (alphanumeric, hyphen, dot, UTF-8)
-        while start > scan_limit {
-            let b = line[start - 1];
-
-            // Use whitelist: only continue if it's a valid domain char
-            // This rejects % and other invalid chars like in "Kagi%20Assistant.app"
-            if !is_domain_char_fast(b) {
-                break;
-            }
-
-            start -= 1;
-        }
-
-        // Check word boundary at end if required (also uses fast lookup)
-        if self.require_word_boundaries && tld_end < line.len() && !is_boundary_fast(line[tld_end])
-        {
-            return None; // Domain continues - not a real boundary
-        }
-
-        if start >= tld_end {
-            return None; // Empty domain
-        }
-
-        Some((start, tld_end))
-    }
 
     /// Validate an extracted domain candidate
     fn is_valid_domain(&self, line: &[u8], span: (usize, usize)) -> bool {
@@ -658,7 +672,13 @@ impl Extractor {
 
     /// Extract IPv4 addresses using SIMD-accelerated dot search
     /// Strategy: Find dots (rare), check for digit.digit pattern, then parse
-    fn extract_ipv4_internal<'a>(&self, line: &'a [u8], matches: &mut Vec<Match<'a>>) {
+    fn extract_ipv4_internal<'a>(&'a self, line: &'a [u8], matches: &mut Vec<Match<'a>>) {
+        self.extract_ipv4_chunk_with_dots(line, matches, None);
+    }
+
+    /// Old line-based IPv4 extraction (kept for reference, now unused)
+    #[allow(dead_code)]
+    fn extract_ipv4_internal_old<'a>(&self, line: &'a [u8], matches: &mut Vec<Match<'a>>) {
         use memchr::memchr_iter;
 
         // Track last parsed end position to skip overlapping candidates
@@ -1087,16 +1107,26 @@ impl Extractor {
     }
 
     /// Extract IPv4 addresses from entire chunk in one pass
-    fn extract_ipv4_chunk<'a>(&'a self, chunk: &'a [u8], matches: &mut Vec<Match<'a>>) {
-        use memchr::memchr_iter;
-
+    /// Uses pre-computed dot positions if provided, otherwise scans for dots
+    fn extract_ipv4_chunk_with_dots<'a>(
+        &'a self,
+        chunk: &'a [u8],
+        matches: &mut Vec<Match<'a>>,
+        dot_positions: Option<&[usize]>,
+    ) {
         let mut last_end = 0;
 
-        // Collect all dot positions first (single SIMD scan)
-        let dot_positions: Vec<usize> = memchr_iter(b'.', chunk).collect();
+        // Use pre-computed dots or scan now
+        let owned_dots;
+        let dots = if let Some(d) = dot_positions {
+            d
+        } else {
+            owned_dots = memchr::memchr_iter(b'.', chunk).collect::<Vec<_>>();
+            &owned_dots
+        };
 
         // Process each dot that has digit.digit pattern
-        for (i, &dot_pos) in dot_positions.iter().enumerate() {
+        for (i, &dot_pos) in dots.iter().enumerate() {
             if dot_pos == 0 || dot_pos + 6 > chunk.len() {
                 continue;
             }
@@ -1119,7 +1149,7 @@ impl Extractor {
             // Check if we have 3+ dots nearby (within reasonable IP range ~15 bytes)
             // Count dots in the region [start, start+15]
             let end_search = (start + 15).min(chunk.len());
-            let dots_in_range = dot_positions[i..]
+            let dots_in_range = dots[i..]
                 .iter()
                 .take_while(|&&pos| pos < end_search)
                 .count();
@@ -1514,6 +1544,27 @@ static TLD_AUTOMATON_ALIGNED: AlignedTldData =
 
 const TLD_AUTOMATON: &[u8] = &TLD_AUTOMATON_ALIGNED.0;
 
+/// Public Suffix List data embedded at compile time
+const PSL_DATA: &str = include_str!("data/public_suffix_list.dat");
+
+/// Hash set of all PSL suffixes with leading dots (e.g., ".com", ".co.uk")
+/// Built once at startup from PSL_DATA for O(1) TLD validation
+static PSL_SUFFIXES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    PSL_DATA
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            // Skip comments and empty lines
+            if line.is_empty() || line.starts_with("//") {
+                return None;
+            }
+            // PSL entries like "com" -> store as ".com"
+            // This lets us do direct substring matching on domains
+            Some(line)
+        })
+        .collect()
+});
+
 /// Compile-time boundary character lookup table for O(1) checking
 /// This replaces the branch-heavy is_word_boundary() function with a single array lookup.
 /// Marked as boundary: whitespace, punctuation commonly found in logs
@@ -1611,6 +1662,38 @@ fn is_word_boundary(b: u8) -> bool {
 fn is_domain_char_fast(b: u8) -> bool {
     // SAFETY: b is u8, so it's always a valid index into [0..256)
     unsafe { *DOMAIN_CHAR_LOOKUP.get_unchecked(b as usize) }
+}
+
+/// Find the valid TLD suffix in a domain string using hash-based PSL lookup
+/// Returns the byte position where the TLD starts (including the dot)
+/// 
+/// Example: "example.co.uk" -> Some(7) for ".co.uk"
+///          "example.com" -> Some(7) for ".com"
+///          "notldhere" -> None
+/// 
+/// Algorithm: Walk backwards through dots, checking longest suffixes first
+/// This is correct because PSL rules require longest-match ("co.uk" before "uk")
+fn find_valid_tld_suffix(domain: &str) -> Option<usize> {
+    let bytes = domain.as_bytes();
+    
+    // Walk backwards through dots, building potential TLD suffixes
+    // Example: "foo.bar.co.uk"
+    //   Check: ".bar.co.uk" (no), ".co.uk" (yes!) -> return position of "."
+    
+    for (i, &b) in bytes.iter().enumerate().rev() {
+        if b == b'.' {
+            // Found a dot - check if suffix from here is in PSL
+            let suffix = &domain[i + 1..]; // Skip the dot itself for PSL lookup
+            
+            if PSL_SUFFIXES.contains(suffix) {
+                // Found valid TLD! Return position of the dot before it
+                return Some(i);
+            }
+        }
+    }
+    
+    // No dot or no valid TLD found
+    None
 }
 
 /// Hex character lookup table for hash validation
