@@ -546,15 +546,11 @@ impl Extractor {
                 continue;
             }
             
-            // Validate UTF-8 on the candidate (defer until we know it might be valid)
+            // Extract candidate as bytes (no UTF-8 validation needed yet)
             let candidate_bytes = &chunk[start..end];
-            let candidate = match std::str::from_utf8(candidate_bytes) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
             
-            // Validate TLD using hash-based PSL lookup
-            let tld_start = match find_valid_tld_suffix(candidate) {
+            // Validate TLD using byte-based PSL lookup (no UTF-8 overhead!)
+            let tld_start = match find_valid_tld_suffix_bytes(candidate_bytes) {
                 Some(pos) => pos,
                 None => continue, // No valid TLD found
             };
@@ -579,6 +575,13 @@ impl Extractor {
             // Validate domain structure (label count, label format)
             let domain_span = (start, end);
             if self.is_valid_domain(chunk, domain_span) {
+                // Only validate UTF-8 at the very end when we know it's a valid domain
+                // This defers the expensive check until absolutely necessary
+                let candidate = match std::str::from_utf8(candidate_bytes) {
+                    Ok(s) => s,
+                    Err(_) => continue, // Invalid UTF-8, skip this domain
+                };
+                
                 matches.push(Match {
                     item: ExtractedItem::Domain(candidate),
                     span: domain_span,
@@ -907,14 +910,9 @@ impl Extractor {
 
         // 2. Must have a valid TLD from the public suffix list
         //    This rejects IP addresses ("192.168.1.222") and fake TLDs ("Uv3.peer")
-        // Convert domain_part to string for TLD validation
-        if let Ok(domain_str) = std::str::from_utf8(domain_part) {
-            // Use hash-based TLD validation
-            if find_valid_tld_suffix(domain_str).is_none() {
-                return None; // No valid TLD found
-            }
-        } else {
-            return None; // Invalid UTF-8 in domain
+        // Use byte-based TLD validation (no UTF-8 conversion needed!)
+        if find_valid_tld_suffix_bytes(domain_part).is_none() {
+            return None; // No valid TLD found
         }
 
         Some((start, end))
@@ -1516,9 +1514,10 @@ impl<'a> ExactSizeIterator for ExtractIter<'a> {}
 /// Public Suffix List data embedded at compile time
 const PSL_DATA: &str = include_str!("data/public_suffix_list.dat");
 
-/// Hash set of all PSL suffixes with leading dots (e.g., ".com", ".co.uk")
+/// Hash set of all PSL suffixes as byte slices (e.g., b"com", b"co.uk")
 /// Built once at startup from PSL_DATA for O(1) TLD validation
-static PSL_SUFFIXES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+/// Uses bytes instead of strings to avoid UTF-8 validation overhead
+static PSL_SUFFIXES: LazyLock<HashSet<&'static [u8]>> = LazyLock::new(|| {
     PSL_DATA
         .lines()
         .filter_map(|line| {
@@ -1527,9 +1526,8 @@ static PSL_SUFFIXES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
             if line.is_empty() || line.starts_with("//") {
                 return None;
             }
-            // PSL entries like "com" -> store as ".com"
-            // This lets us do direct substring matching on domains
-            Some(line)
+            // PSL entries like "com" -> store as bytes
+            Some(line.as_bytes())
         })
         .collect()
 });
@@ -1633,26 +1631,24 @@ fn is_domain_char_fast(b: u8) -> bool {
     unsafe { *DOMAIN_CHAR_LOOKUP.get_unchecked(b as usize) }
 }
 
-/// Find the valid TLD suffix in a domain string using hash-based PSL lookup
+/// Find the valid TLD suffix in a domain byte slice using hash-based PSL lookup
 /// Returns the byte position where the TLD starts (including the dot)
 /// 
-/// Example: "example.co.uk" -> Some(7) for ".co.uk"
-///          "example.com" -> Some(7) for ".com"
-///          "notldhere" -> None
+/// Example: b"example.co.uk" -> Some(7) for b".co.uk"
+///          b"example.com" -> Some(7) for b".com"
+///          b"notldhere" -> None
 /// 
 /// Algorithm: Walk backwards through dots, checking longest suffixes first
 /// This is correct because PSL rules require longest-match ("co.uk" before "uk")
-fn find_valid_tld_suffix(domain: &str) -> Option<usize> {
-    let bytes = domain.as_bytes();
-    
+fn find_valid_tld_suffix_bytes(domain_bytes: &[u8]) -> Option<usize> {
     // Walk backwards through dots, building potential TLD suffixes
-    // Example: "foo.bar.co.uk"
-    //   Check: ".bar.co.uk" (no), ".co.uk" (yes!) -> return position of "."
+    // Example: b"foo.bar.co.uk"
+    //   Check: b"co.uk" (yes!) -> return position of "."
     
-    for (i, &b) in bytes.iter().enumerate().rev() {
+    for (i, &b) in domain_bytes.iter().enumerate().rev() {
         if b == b'.' {
             // Found a dot - check if suffix from here is in PSL
-            let suffix = &domain[i + 1..]; // Skip the dot itself for PSL lookup
+            let suffix = &domain_bytes[i + 1..]; // Skip the dot itself for PSL lookup
             
             if PSL_SUFFIXES.contains(suffix) {
                 // Found valid TLD! Return position of the dot before it
