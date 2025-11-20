@@ -1730,8 +1730,10 @@ pub(crate) fn find_word_boundaries_into(chunk: &[u8], boundaries: &mut Vec<usize
         boundaries.push(0); // Start of first token
     }
 
-    // Scan for transitions
-    for (i, &byte) in chunk.iter().enumerate().skip(1) {
+    // Scan for transitions using ranged loop for better optimization
+    // LLVM can more easily eliminate bounds checks with explicit range
+    for i in 1..chunk.len() {
+        let byte = chunk[i];
         let is_boundary = is_boundary_fast(byte);
 
         if in_token && is_boundary {
