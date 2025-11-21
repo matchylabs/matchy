@@ -23,9 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for line in psl_content.lines() {
         let trimmed = line.trim();
         
-        // Keep comments and empty lines as-is
-        if trimmed.is_empty() || trimmed.starts_with("//") {
-            all_entries.insert(line.to_string());
+        // Skip empty lines, comments, and exception rules
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("!") {
             continue;
         }
         
