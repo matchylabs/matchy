@@ -267,7 +267,7 @@ This is the first stable release of matchy, representing a production-ready unif
   - Comprehensive `docs/FUZZING_GUIDE.md` (663 lines)
   - 5 fuzz targets: pattern_matching, ip_lookup, glob_patterns, data_values, literal_exact_match
   - `fuzz/README.md` (229 lines) and `FUZZ_TARGETS_SUMMARY.md` (71 lines)
-  - `fuzz_quickstart.sh` automation script
+  - `fuzz/fuzz_quickstart.sh` automation script
   - cargo-fuzz configuration in fuzz/ directory
 
 - **New Example Programs**

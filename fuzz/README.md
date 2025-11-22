@@ -6,7 +6,7 @@ This directory contains cargo-fuzz targets for testing matchy's robustness again
 
 ```bash
 # Quick start (from project root)
-./fuzz_quickstart.sh
+./fuzz/fuzz_quickstart.sh
 
 # Or manually run a specific target
 cargo +nightly fuzz run fuzz_database_load
@@ -224,6 +224,6 @@ Example GitHub Actions snippet:
 
 ## See Also
 
-- **[FUZZING_GUIDE.md](../docs/FUZZING_GUIDE.md)** - Comprehensive fuzzing guide
-- **[fuzz_quickstart.sh](../fuzz_quickstart.sh)** - Automated fuzzing setup
+- **[FUZZING_GUIDE.md](../.dev/docs/FUZZING_GUIDE.md)** - Comprehensive fuzzing guide (local only)
+- **[fuzz_quickstart.sh](fuzz_quickstart.sh)** - Automated fuzzing setup
 - **cargo-fuzz docs** - https://rust-fuzz.github.io/book/cargo-fuzz.html

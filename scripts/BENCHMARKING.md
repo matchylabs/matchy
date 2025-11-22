@@ -43,13 +43,41 @@ open target/criterion/report/index.html
 ## Directory Structure
 
 ```
-benchmarks/
-├── README.md                           # This file
-├── baseline_pre-optimization_YYYYMMDD/ # Baseline captures
-│   ├── metadata.json                   # System info, git commit, etc.
-│   └── <criterion-data>/               # Raw benchmark data
-└── comparison_YYYYMMDD/                # Comparison results
-    └── metadata.json                   # Comparison metadata
+benchmarks/                              # Local-only (gitignored)
+├── criterion_data/                      # Persistent Criterion data (via symlink)
+│   ├── build/
+│   ├── match/
+│   │   └── p100_t1000/
+│   │       └── medium/
+│   │           ├── new/                 # Most recent run
+│   │           ├── pre-optimization/    # Saved baseline
+│   │           └── report/
+│   └── ...
+├── baseline_pre-optimization_YYYYMMDD/  # Timestamped baseline backups
+│   ├── metadata.json                    # System info, git commit, etc.
+│   └── <criterion-data>/                # Copy of baseline data
+└── comparison_YYYYMMDD/                 # Comparison results
+    └── metadata.json                    # Comparison metadata
+
+target/
+└── criterion -> ../benchmarks/criterion_data  # Symlink (auto-created)
+```
+
+### Data Persistence
+
+By default, Criterion stores data in `target/criterion/`, which is lost on `cargo clean`. This project uses a **symlink** to persist benchmark data:
+
+**How it works:**
+- Scripts automatically create `target/criterion -> ../benchmarks/criterion_data`
+- Benchmark data survives `cargo clean` because it's actually stored in `benchmarks/`
+- The symlink is recreated automatically when you run benchmark scripts
+- Works transparently with all Criterion commands
+
+**Manual setup** (if needed):
+```bash
+mkdir -p benchmarks/criterion_data
+mkdir -p target
+ln -s ../benchmarks/criterion_data target/criterion
 ```
 
 ## Key Metrics
@@ -100,7 +128,13 @@ change: +5.23% (p = 0.12)    ← 5% slower, but not significant
 ### Baseline Not Found
 - Ensure you ran `./scripts/benchmark_baseline.sh` first
 - Check `target/criterion/` directory exists
+- If you ran `cargo clean`, the symlink was removed - just run the script again to recreate it
 - List available: `./scripts/benchmark_report.sh`
+
+### Symlink Issues
+- **Check symlink**: `ls -la target/criterion` (should show `-> ../benchmarks/criterion_data`)
+- **After cargo clean**: Symlink is removed but data persists - scripts recreate it automatically
+- **Start fresh**: `rm -rf benchmarks/criterion_data` to delete all benchmark data
 
 ### Unexpected Results
 - Verify `black_box()` usage in benchmarks
@@ -160,6 +194,5 @@ cargo bench --bench matchy_bench -- --output-format json > results.json
 
 ## See Also
 
-- [BENCHMARKING_STRATEGY.md](../BENCHMARKING_STRATEGY.md) - Detailed strategy
-- [PERFORMANCE_OPTIMIZATIONS.md](../PERFORMANCE_OPTIMIZATIONS.md) - Optimization techniques
 - [Criterion.rs docs](https://bheisler.github.io/criterion.rs/book/) - Official documentation
+- [scripts/README.md](README.md) - Benchmark script documentation

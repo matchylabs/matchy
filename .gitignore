@@ -7,8 +7,7 @@
 /tests/test_cpp_api
 /tests/test_mmdb_compat
 
-CLAUDE.md
-/docs
+/.dev/
 
 # Object files and other C/C++ build artifacts
 *.o
@@ -31,10 +30,8 @@ Thumbs.db
 flamegraph.svg
 /*.mxy
 
-# Benchmarks - ignore all generated data (baselines are local workflow artifacts)
-/benchmarks/criterion_data/
-/benchmarks/comparison_*/
-/benchmarks/baseline_*/
+# Benchmarks - local data storage only (not committed, like target/)
+/benchmarks/
 
 # Profiling output files
 dhat-*.json

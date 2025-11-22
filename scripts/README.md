@@ -2,6 +2,9 @@
 
 Utility scripts for the matchy project.
 
+**Additional Documentation:**
+- **[BENCHMARKING.md](BENCHMARKING.md)** - Comprehensive benchmarking guide (includes data persistence setup)
+
 ## Benchmark Management Scripts
 
 These scripts help capture, compare, and analyze performance benchmarks using Criterion.
