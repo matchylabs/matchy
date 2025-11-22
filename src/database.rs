@@ -740,6 +740,52 @@ impl Database {
         Ok(result)
     }
 
+    /// Look up an extracted item using the most efficient path
+    ///
+    /// This method handles the type differences in `ExtractedItem` automatically,
+    /// using the optimal lookup strategy for each variant:
+    /// - IP addresses use `lookup_ip()` (avoids string parsing)
+    /// - Everything else uses `lookup()` (string-based)
+    ///
+    /// This is the recommended way to query databases after extraction,
+    /// as it avoids boilerplate match statements and ensures maximum performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The extracted match to look up
+    /// * `input` - The original input buffer (needed to extract string slices)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use matchy::{Database, extractor::Extractor};
+    ///
+    /// let db = Database::from("threats.mxy").open()?;
+    /// let extractor = Extractor::new()?;
+    ///
+    /// let log_line = b"Connection from 192.168.1.1 to evil.com";
+    ///
+    /// for item in extractor.extract_from_line(log_line) {
+    ///     if let Some(result) = db.lookup_extracted(&item, log_line)? {
+    ///         println!("Match: {} -> {:?}", item.as_str(log_line), result);
+    ///     }
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn lookup_extracted(
+        &self,
+        item: &crate::extractor::Match,
+        input: &[u8],
+    ) -> Result<Option<QueryResult>, DatabaseError> {
+        use crate::extractor::ExtractedItem;
+
+        match &item.item {
+            ExtractedItem::Ipv4(ip) => self.lookup_ip(IpAddr::V4(*ip)),
+            ExtractedItem::Ipv6(ip) => self.lookup_ip(IpAddr::V6(*ip)),
+            _ => self.lookup(item.as_str(input)),
+        }
+    }
+
     /// Look up a string (literal or glob pattern) - uncached internal method
     ///
     /// Returns matching pattern IDs and associated data.
@@ -1345,5 +1391,48 @@ mod tests {
         // Should auto-detect as pattern (but no pattern data in this DB)
         let result = db.lookup("example.com").unwrap();
         assert!(result.is_none() || matches!(result, Some(QueryResult::NotFound)));
+    }
+
+    #[test]
+    fn test_lookup_extracted() {
+        use crate::extractor::Extractor;
+
+        let db = Database::from("tests/data/GeoLite2-Country.mmdb")
+            .open()
+            .unwrap();
+        let extractor = Extractor::new().unwrap();
+
+        // Test with IP addresses (should use efficient typed lookup)
+        let log_line = b"Connection from 8.8.8.8 and 2001:4860:4860::8888";
+        let matches: Vec<_> = extractor.extract_from_line(log_line).collect();
+
+        assert_eq!(matches.len(), 2, "Should extract 2 IP addresses");
+
+        // First match: IPv4
+        let result = db.lookup_extracted(&matches[0], log_line).unwrap();
+        assert!(
+            matches!(result, Some(QueryResult::Ip { .. })),
+            "IPv4 should match via lookup_extracted"
+        );
+
+        // Second match: IPv6
+        let result = db.lookup_extracted(&matches[1], log_line).unwrap();
+        assert!(
+            matches!(result, Some(QueryResult::Ip { .. })),
+            "IPv6 should match via lookup_extracted"
+        );
+
+        // Test with domain (should use string-based lookup)
+        let log_line = b"Visit example.com for more info";
+        let matches: Vec<_> = extractor.extract_from_line(log_line).collect();
+
+        assert_eq!(matches.len(), 1, "Should extract 1 domain");
+
+        // Domain lookup (no pattern data in this DB, so expect None or NotFound)
+        let result = db.lookup_extracted(&matches[0], log_line).unwrap();
+        assert!(
+            result.is_none() || matches!(result, Some(QueryResult::NotFound)),
+            "Domain should not match in IP-only database"
+        );
     }
 }

@@ -72,13 +72,13 @@ match Database::open("database.mxy") {
 
 ## Querying
 
-### Method Signature
+### lookup() - Direct String Lookup
 
 ```rust
 pub fn lookup<S: AsRef<str>>(&self, query: S) -> Result<Option<QueryResult>, MatchyError>
 ```
 
-### Basic Usage
+Basic usage:
 
 ```rust
 match db.lookup("192.0.2.1")? {
@@ -86,6 +86,54 @@ match db.lookup("192.0.2.1")? {
     None => println!("Not found"),
 }
 ```
+
+### lookup_extracted() - Lookup After Extraction
+
+```rust
+pub fn lookup_extracted(
+    &self,
+    item: &matchy::extractor::Match,
+    input: &[u8],
+) -> Result<Option<QueryResult>, DatabaseError>
+```
+
+Efficient lookup for extracted patterns. Automatically uses the optimal lookup path:
+- IP addresses use typed `lookup_ip()` (avoids string parsing)
+- Other types use string-based `lookup()`
+
+**Usage:**
+
+```rust
+use matchy::{Database, extractor::Extractor};
+
+let db = Database::from("threats.mxy").open()?;
+let extractor = Extractor::new()?;
+
+let log_line = b"Connection from 192.168.1.1 to evil.com";
+
+for item in extractor.extract_from_line(log_line) {
+    if let Some(result) = db.lookup_extracted(&item, log_line)? {
+        println!("Match: {} (type: {})",
+            item.as_str(log_line),
+            item.item.type_name()
+        );
+    }
+}
+```
+
+**Why use this?**
+
+1. **Cleaner code**: No manual matching on `ExtractedItem` variants
+2. **Better performance**: IP addresses use direct typed lookups
+3. **Future-proof**: New extracted types work automatically
+
+**Parameters:**
+- `item`: The extracted match from `Extractor`
+- `input`: Original input buffer (needed to extract string slices)
+
+**Returns:** `Ok(Some(QueryResult))` if found, `Ok(None)` if not found
+
+See the [Querying guide](../guide/querying.md#extract-and-lookup-pattern) for more examples.
 
 ## QueryResult Types
 

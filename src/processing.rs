@@ -489,10 +489,12 @@ impl Worker {
                     None
                 };
 
-                // Use original string slice for lookup (avoids IP to_string conversion)
-                // Database.lookup() handles IP parsing internally and uses the string for caching
-                let query_str = item.as_str(data);
-                let result_opt = database.lookup(query_str).map_err(|e| e.to_string())?;
+                // Use lookup_extracted for optimal performance:
+                // - IP addresses use typed lookup (no string parsing)
+                // - Other types use string lookup
+                let result_opt = database
+                    .lookup_extracted(&item, data)
+                    .map_err(|e| e.to_string())?;
 
                 if let Some(start) = lookup_start {
                     self.stats.lookup_time += start.elapsed();

@@ -83,6 +83,16 @@ Querying unified databases with both IP and pattern data:
 
 **Run:** `cargo run --example combined_query -- combined_database.mmdb`
 
+### `lookup_extracted_demo.rs`
+Demonstrates the efficient extract-and-lookup pattern:
+- Using `Extractor` to find IPs, domains, and hashes in log lines
+- Using `lookup_extracted()` for clean, performant lookups
+- Avoiding verbose match statements on `ExtractedItem` variants
+- Perfect template for Vector integration and log scanning
+- Shows threat detection workflow
+
+**Run:** `cargo run --release --example lookup_extracted_demo`
+
 ## Pattern Matching
 
 ### `glob_demo.rs`

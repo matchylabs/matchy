@@ -269,6 +269,30 @@ The extractor is highly optimized:
    ```
 
 
+## Combining with Database Lookups
+
+After extracting patterns, you typically want to look them up in a database. Use `lookup_extracted()` for a clean, efficient API:
+
+```rust
+use matchy::{Database, extractor::Extractor};
+
+let db = Database::from("threats.mxy").open()?;
+let extractor = Extractor::new()?;
+
+let log_line = b"Traffic from 192.168.1.100 to evil.com";
+
+for item in extractor.extract_from_line(log_line) {
+    if let Some(result) = db.lookup_extracted(&item, log_line)? {
+        println!("⚠️  Match: {} ({})",
+            item.as_str(log_line),
+            item.item.type_name()
+        );
+    }
+}
+```
+
+See the [Querying guide](querying.md#extract-and-lookup-pattern) for complete details on the extract-and-lookup pattern.
+
 ## CLI Integration
 
 The `matchy match` command uses the extractor internally:
