@@ -13,143 +13,154 @@
 [![Documentation](https://docs.rs/matchy/badge.svg)](https://docs.rs/matchy)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
-**Fast unified database for IP addresses, strings, and glob patterns.**
+**Fast IoC matching against logs, network traffic, and security data.**
 
-Match IP addresses, CIDR ranges, exact strings, and thousands of glob patterns in microseconds. One database format, one API, zero compromises on performance.
+Stop using `grep -f` with massive indicator lists. Matchy turns your threat intelligence into a database that matches IPs, domains, file hashes, and patterns in microseconds—not minutes.
 
-```rust
-let db = Database::open("threats.mxy")?;
+```bash
+# Build a threat database from your intel feeds
+matchy build threats.csv -o threats.mxy
 
-// All query types use the same API
-db.lookup("8.8.8.8")?;              // IP address
-db.lookup("evil.example.com")?;     // Exact string
-db.lookup("sub.evil.example.com")?; // Matches *.example.com pattern
+# Scan your logs for matches (JSON output, ~450 MB/s)
+matchy match threats.mxy access.log
+
+# Query individual indicators
+matchy query threats.mxy 1.2.3.4
 ```
 
-## Features
+## What It's For
 
-- **7M+ queries/second** for IP lookups, 3M+ for glob patterns
-- **<1ms load time** via memory mapping, regardless of database size
-- **99% memory savings** in multi-process deployments
-- **Query result caching**: 2-10x speedup for high-traffic workloads
-- **Log scanning**: SIMD-accelerated extraction of domains, IPs (IPv4/IPv6), emails, file hashes (MD5/SHA1/SHA256/SHA384), and cryptocurrency addresses (Bitcoin, Ethereum, Monero)
-- **Unified database**: IPs, strings, and patterns in one file
-- **MaxMind compatible**: Extended MMDB format
-- **Rich metadata**: JSON-like structured data storage
-- **Multiple APIs**: Rust, C, and MaxMind-compatible C APIs
+**Threat Intelligence Matching**: You have threat feeds (IPs, domains, file hashes) and need to search for them in your data. SIEM lookups are slow or complicated. Command-line tools like `grep -f` take forever with 100K+ indicators.
+
+**Use Cases**:
+- Scan logs for known-bad IPs, domains, or C2 infrastructure
+- Match file hashes from malware feeds against endpoint logs
+- Real-time lookups in scripts and pipelines
+- Offline analysis when SIEM access is limited
+- Pre-filtering before sending to expensive SIEM queries
+
+**Better Than**:
+- `grep -f` - Matchy loads in <1ms vs minutes, queries in microseconds vs seconds
+- SIEM lookups - Run locally, no query costs, instant results
+- Custom scripts - One tool handles IPs, CIDRs, domains, globs, and hashes
+
+## Key Features
+
+- **Unified database**: IPs, CIDRs, exact strings, glob patterns in one file
+- **Fast loading**: <1ms regardless of database size (memory-mapped)
+- **Fast queries**: Sub-millisecond lookups on 100K+ indicators
+- **Log scanning**: Auto-extracts IPs, domains, emails, hashes from unstructured logs
+- **Glob patterns**: `*.evil.com` matches subdomains automatically
+- **Rich metadata**: Attach threat level, category, source to each indicator
+- **MaxMind compatible**: Query GeoIP databases directly - no need for separate libmaxminddb
+- **Build MMDB databases**: Create MaxMind-compatible databases from CSVs (libmaxminddb has no builder)
+- **Multiple formats**: Import from CSV, JSONL, or read existing MaxMind MMDB files
 
 ## Quick Start
 
-### CLI
+### Installation
 
 ```bash
-# Install
 cargo install matchy
+```
 
-# Create a threats database
-cat > threats.csv << EOF
-entry,threat_level,category
-1.2.3.4,high,malware
-10.0.0.0/8,low,internal
-*.evil.com,critical,phishing
-malware.example.com,high,c2
-EOF
+**Requirements**: Rust 1.70+ (or use [pre-built binaries](https://github.com/sethhall/matchy/releases))
 
+### Build a Threat Database
+
+Create a CSV with your indicators:
+
+```csv
+entry,threat_level,category,source
+1.2.3.4,high,malware,abuse.ch
+10.0.0.0/8,low,internal,rfc1918
+*.evil.com,critical,phishing,urlhaus
+malware.example.com,high,c2,internal
+ab5ef3c21d4e...,high,malware,virustotal
+```
+
+Build the database:
+
+```bash
 matchy build threats.csv -o threats.mxy --format csv
 
-# Query - matches return JSON
-matchy query threats.mxy 1.2.3.4
-# [{"threat_level":"high","category":"malware"}]
-
-matchy query threats.mxy sub.evil.com
-# [{"threat_level":"critical","category":"phishing"}]
-
-# Scan logs for threats (outputs JSON, one match per line)
-matchy match threats.mxy access.log --stats
-# Outputs JSON to stdout (one line per match):
-# {"matched_text":"evil.example.com","match_type":"pattern","data":[{"threat_level":"critical"}]}
-# {"matched_text":"1.2.3.4","match_type":"ip","cidr":"1.2.3.0/24",...}
-#
-# Statistics to stderr (with --stats flag):
-# [INFO] Lines processed: 15,234
-# [INFO] Lines with matches: 127 (0.8%)
-# [INFO] Throughput: 450.23 MB/s
+# Build MaxMind-compatible MMDB (IP data only)
+matchy build ip-blocklist.csv -o blocklist.mmdb --format csv
+# Works with any tool expecting MMDB format!
 ```
 
-### Rust API
+### Scan Logs for Matches
 
 ```bash
-# Full installation (includes CLI)
-cargo add matchy
+# Scan access logs (outputs JSON, one match per line)
+matchy match threats.mxy /var/log/nginx/access.log
 
-# Library only (no CLI dependencies - saves ~40 crates)
-cargo add matchy --no-default-features
+# With statistics
+matchy match threats.mxy access.log --stats
+# JSON matches to stdout, stats to stderr:
+# [INFO] Lines processed: 523,441
+# [INFO] Matches found: 127 (0.02%)
+# [INFO] Throughput: 450 MB/s
+
+# Scan gzip logs (automatic decompression)
+matchy match threats.mxy access.log.gz
+
+# Watch live logs
+tail -f /var/log/app.log | matchy match threats.mxy -
 ```
 
-```rust
-use matchy::{Database, DatabaseBuilder, Extractor};
+### Query Individual Indicators
 
-// Build
-let mut builder = DatabaseBuilder::new();
-builder.add_ip("8.8.8.8", data)?;
-builder.add_pattern("*.evil.com", data)?;
-builder.save("db.mxy")?;
+```bash
+# Check an IP
+matchy query threats.mxy 1.2.3.4
+# [{"threat_level":"high","category":"malware","source":"abuse.ch"}]
 
-// Query with caching for high-traffic workloads
-let db = Database::from("db.mxy")
-    .cache_capacity(10_000)  // LRU cache for 10k queries
-    .open()?;
+# Check a domain
+matchy query threats.mxy sub.evil.com  
+# [{"threat_level":"critical","category":"phishing","source":"urlhaus"}]
 
-if let Some(result) = db.lookup("sub.evil.com")? {
-    println!("Match: {:?}", result);
-}
+# Check a hash
+matchy query threats.mxy ab5ef3c21d4e...
 
-// Extract patterns from logs
-let extractor = Extractor::new()?;
-for line in log_file.lines() {
-    for match_item in extractor.extract_from_line(line.as_bytes()) {
-        println!("Found: {:?}", match_item);
-    }
-}
+# Query MaxMind GeoIP databases (no libmaxminddb needed)
+matchy query GeoLite2-City.mmdb 8.8.8.8
+# {"city":"Mountain View","country":"US",...}
 ```
 
-### C API
+## For Developers
+
+### Rust Library
+
+```bash
+cargo add matchy --no-default-features  # Library only, no CLI
+```
+
+See **[API docs](https://docs.rs/matchy)** for building databases, querying, and extracting IoCs from text.
+
+### C/C++ Library
 
 ```c
 #include <matchy/matchy.h>
 
-matchy_t *db = matchy_open("db.mxy");
+matchy_t *db = matchy_open("threats.mxy");
 matchy_result_t result = matchy_query(db, "1.2.3.4");
-if (result.found) {
-    printf("Data: %s\n", result.data_json);
-}
 matchy_close(db);
 ```
 
+MaxMind-compatible API also available. See **[The Matchy Book](https://sethhall.github.io/matchy/)** for integration guides.
+
 ## Documentation
 
-- **[The Matchy Book](https://sethhall.github.io/matchy/introduction.html)** - Complete guide for CLI and APIs
-- **[API Reference](https://docs.rs/matchy)** - Rust API documentation
-- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture and implementation details
+- **[The Matchy Book](https://sethhall.github.io/matchy/)** - Complete CLI guide and examples
+- **[API Reference](https://docs.rs/matchy)** - Rust library documentation  
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture and performance details
 
-## Building
+## Project Info
 
-```bash
-cargo build --release
-cargo test
-```
+**License**: BSD-2-Clause  
+**Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)  
+**Status**: Production-ready, 242 tests passing
 
-**Requirements:** Rust 1.70+
-
-## Contributing
-
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## License
-
-BSD-2-Clause
-
-## Acknowledgments
-
-Matchy extends MaxMind's MMDB format with [Paraglob's](https://github.com/zeek/paraglob) pattern matching, creating a unified database for IPs, strings, and patterns with memory efficiency that scales to hundreds of worker processes.
+Matchy extends MaxMind's MMDB format with [Paraglob](https://github.com/zeek/paraglob) glob matching, creating a unified IoC database that's fast enough for real-time lookups and memory-efficient enough to scale to hundreds of worker processes.
 
