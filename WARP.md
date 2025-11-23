@@ -12,8 +12,9 @@ Guidance for working with the matchy codebase.
 - Extended MMDB format with backwards compatibility
 
 **Status**: ✅ Production Ready
-- 79/79 tests passing
+- 243/243 tests passing
 - Excellent performance across all query types
+- Zero-copy glob pattern matching (v5 format)
 - Stable binary format for cross-platform use
 - Stable C FFI for cross-language use
 
@@ -54,7 +55,7 @@ The release build automatically generates `include/matchy.h` via cbindgen.
 ### Testing
 
 ```bash
-# Run all tests (79 tests)
+# Run all tests (243 tests)
 cargo test
 
 # Run with output visible

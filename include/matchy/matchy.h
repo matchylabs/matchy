@@ -51,9 +51,14 @@ namespace matchy {
 #define MATCHY_LITERAL_HASH_VERSION 1
 
 /*
- Current format version (v4: uses ACNodeHot for 50% memory reduction)
+ Current format version (v5: serialized glob segments for zero-copy loading)
  */
-#define MATCHY_FORMAT_VERSION 4
+#define MATCHY_FORMAT_VERSION 5
+
+/*
+ Previous format version (v4: uses ACNodeHot for 50% memory reduction)
+ */
+#define MATCHY_FORMAT_VERSION_V4 4
 
 /*
  Previous format version (v3: adds AC literal mapping for zero-copy loading)
