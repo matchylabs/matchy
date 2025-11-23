@@ -12,25 +12,39 @@ use crate::data_section::DataValue;
 use crate::literal_hash::LiteralHash;
 use crate::mmdb::{MmdbError, MmdbHeader, SearchTree};
 use crate::paraglob_offset::Paraglob;
+use arc_swap::ArcSwap;
 use lru::LruCache;
 use memmap2::Mmap;
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::fs::File;
 use std::hash::BuildHasherDefault;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 // Thread-local query cache with generation tracking
 // Each thread gets its own LRU cache for zero-contention queries
 // Generation counter is checked to invalidate cache on database reload
+type QueryCache = (
+    u64,
+    LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>,
+);
+
 thread_local! {
-    static QUERY_CACHE: RefCell<Option<(u64, LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>)>> = RefCell::new(None);
+    static QUERY_CACHE: RefCell<Option<QueryCache>> = const { RefCell::new(None) };
+
+    // Thread-local cached Arc pointer to current database (for auto-reload)
+    // Refreshed when generation counter changes (~1ns atomic check per query)
+    static LOCAL_DB: RefCell<Option<Arc<Database>>> = const { RefCell::new(None) };
+
+    // Last seen generation counter (for detecting reloads)
+    static LOCAL_GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Statistics for database queries and cache performance
@@ -108,6 +122,22 @@ impl DatabaseStatsSnapshot {
     }
 }
 
+/// Event fired when database is reloaded
+#[derive(Debug, Clone)]
+pub struct ReloadEvent {
+    /// Path to the database file
+    pub path: PathBuf,
+    /// Whether reload succeeded
+    pub success: bool,
+    /// Error message if reload failed (None on success)
+    pub error: Option<String>,
+    /// Generation counter after reload
+    pub generation: u64,
+}
+
+/// Callback type for reload notifications
+pub type ReloadCallback = Arc<dyn Fn(ReloadEvent) + Send + Sync>;
+
 /// Query result from a database lookup
 #[derive(Debug, Clone)]
 pub enum QueryResult {
@@ -139,7 +169,7 @@ impl Drop for WatcherThread {
     fn drop(&mut self) {
         // Send shutdown signal
         let _ = self.shutdown_tx.send(());
-        
+
         // Wait for thread to exit
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -148,16 +178,22 @@ impl Drop for WatcherThread {
 }
 
 /// Shared state for file watching and auto-reload
+/// Uses lock-free Arc swapping for zero-overhead database access
 struct WatcherState {
-    /// Current database behind RwLock for atomic swaps
-    current: Arc<RwLock<Database>>,
-    
+    /// Current database using lock-free atomic Arc pointer
+    /// Threads can load this once and cache it thread-locally
+    current: Arc<ArcSwap<Database>>,
+
     /// Generation counter - incremented on each reload to invalidate caches
+    /// Threads check this (~1ns) to know when to refresh their local Arc
     generation: Arc<AtomicU64>,
-    
+
+    /// Optional callback for reload notifications
+    reload_callback: Option<ReloadCallback>,
+
     /// Watcher thread handle
     _thread: WatcherThread,
-    
+
     /// File watcher (must be kept alive!)
     _watcher: notify::RecommendedWatcher,
 }
@@ -184,7 +220,7 @@ enum DatabaseFormat {
 /// ```no_run
 /// use matchy::Database;
 ///
-/// let db = Database::open("threats.db")?;
+/// let db = Database::from("threats.db").open()?;
 ///
 /// // IP lookup
 /// if let Some(result) = db.lookup("1.2.3.4")? {
@@ -248,7 +284,7 @@ impl PatternDataMappings {
 const DEFAULT_QUERY_CACHE_SIZE: usize = 10_000;
 
 /// Options for opening a database
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DatabaseOptions {
     /// Path to the database file (optional for from_bytes)
     pub path: PathBuf,
@@ -261,6 +297,9 @@ pub struct DatabaseOptions {
 
     /// Enable auto-reload on file changes
     pub auto_reload: bool,
+
+    /// Optional callback for reload notifications
+    pub reload_callback: Option<ReloadCallback>,
 }
 
 impl Default for DatabaseOptions {
@@ -270,6 +309,7 @@ impl Default for DatabaseOptions {
             cache_capacity: Some(DEFAULT_QUERY_CACHE_SIZE),
             bytes: None,
             auto_reload: false,
+            reload_callback: None,
         }
     }
 }
@@ -352,6 +392,37 @@ impl DatabaseOpener {
         self
     }
 
+    /// Set callback for reload notifications
+    ///
+    /// The callback is invoked whenever the database is reloaded (or reload fails).
+    /// Only works when auto-reload is enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use matchy::Database;
+    ///
+    /// let db = Database::from("threats.mxy")
+    ///     .auto_reload()
+    ///     .on_reload(|event| {
+    ///         if event.success {
+    ///             eprintln!("Database reloaded: {} (generation {})",
+    ///                      event.path.display(), event.generation);
+    ///         } else {
+    ///             eprintln!("Reload failed: {}", event.error.unwrap_or_default());
+    ///         }
+    ///     })
+    ///     .open()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn on_reload<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(ReloadEvent) + Send + Sync + 'static,
+    {
+        self.options.reload_callback = Some(Arc::new(callback));
+        self
+    }
+
     /// Open the database with configured options
     pub fn open(self) -> Result<Database, DatabaseError> {
         Database::open_with_options(self.options)
@@ -430,60 +501,32 @@ pub struct Database {
 unsafe impl Send for Database {}
 unsafe impl Sync for Database {}
 
-// Database can be cloned - all components are either Copy or cheap to clone
-// The mmap is reference-counted internally, so cloning is O(1)
-impl Clone for Database {
-    fn clone(&self) -> Self {
-        Self {
-            data: match &self.data {
-                DatabaseStorage::Owned(v) => DatabaseStorage::Owned(v.clone()),
-                // Mmap doesn't impl Clone - but we can try_clone() which creates a new mmap of same file
-                // For our use case, we want to share the same mmap, so we'll use unsafe transmute
-                // Safety: self.data lifetime is 'static (transmuted at creation), so clone is safe
-                DatabaseStorage::Mmap(m) => unsafe {
-                    DatabaseStorage::Mmap(std::ptr::read(m as *const _))
-                },
-            },
-            format: self.format,
-            ip_header: self.ip_header,
-            literal_hash: self.literal_hash.clone(),
-            pattern_matcher: self.pattern_matcher.clone(),
-            pattern_data_mappings: self.pattern_data_mappings.clone(),
-            cache_capacity: self.cache_capacity,
-            cache_enabled: self.cache_enabled,
-            stats: Arc::clone(&self.stats), // Shared stats across all clones
-            watcher: self.watcher.as_ref().map(Arc::clone), // Shared watcher state
-            cache_generation: Arc::clone(&self.cache_generation), // Shared generation counter
-            source_path: self.source_path.clone(),
-            open_options: self.open_options.clone(),
-        }
-    }
-}
-
 impl Database {
     /// Helper: Access thread-local cache, initializing if needed
     /// Automatically invalidates cache if generation changed (database reloaded)
     #[inline]
     fn with_cache<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(&mut LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>) -> R,
+        F: FnOnce(
+            &mut LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>,
+        ) -> R,
     {
         if !self.cache_enabled {
             return None;
         }
-        
+
         let current_gen = self.cache_generation.load(Ordering::Acquire);
-        
+
         QUERY_CACHE.with(|cache| {
             let mut cache_borrow = cache.borrow_mut();
-            
+
             // Check if cache needs initialization or invalidation
             let needs_reset = match *cache_borrow {
-                None => true, // Not yet initialized
+                None => true,                                 // Not yet initialized
                 Some((gen, _)) if gen != current_gen => true, // Generation mismatch - invalidate!
-                _ => false, // Cache is valid
+                _ => false,                                   // Cache is valid
             };
-            
+
             if needs_reset {
                 // Initialize or reset cache with current generation
                 *cache_borrow = Some((
@@ -494,7 +537,7 @@ impl Database {
                     ),
                 ));
             }
-            
+
             // Access the cache (guaranteed to be Some after initialization)
             Some(f(&mut cache_borrow.as_mut().unwrap().1))
         })
@@ -604,9 +647,7 @@ impl Database {
         if !self.cache_enabled {
             return 0;
         }
-        QUERY_CACHE.with(|cache| {
-            cache.borrow().as_ref().map_or(0, |(_, c)| c.len())
-        })
+        QUERY_CACHE.with(|cache| cache.borrow().as_ref().map_or(0, |(_, c)| c.len()))
     }
 
     /// Get database statistics snapshot
@@ -713,46 +754,13 @@ impl Database {
             let mut watcher_options = db.open_options.clone();
             watcher_options.auto_reload = false;
             let watcher_state = Self::spawn_watcher_thread(path.clone(), watcher_options)?;
-            
+
             // Share generation counter with outer database for cache invalidation
             db.cache_generation = Arc::clone(&watcher_state.generation);
             db.watcher = Some(watcher_state);
         }
 
         Ok(db)
-    }
-    /// Open a database file using memory mapping
-    ///
-    /// This uses mmap for zero-copy file access, which is much faster than
-    /// loading the entire file into memory, especially for large databases.
-    ///
-    /// Validates UTF-8 on pattern string reads.
-    ///
-    /// Automatically detects the database format and initializes
-    /// the appropriate lookup structures. Uses default cache settings.
-    ///
-    /// # Deprecation
-    ///
-    /// Use `Database::from(path).open()` for the new builder API with configurable options.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use matchy::Database;
-    /// // Old way (still works)
-    /// let db = Database::open("threats.mxy")?;
-    ///
-    /// // New way (recommended)
-    /// let db = Database::from("threats.mxy").open()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[deprecated(
-        since = "1.1.0",
-        note = "Use `Database::from(path).open()` instead for configurable options"
-    )]
-    pub fn open(path: &str) -> Result<Self, DatabaseError> {
-        // Delegate to new builder API
-        Self::from(path).open()
     }
 
     /// Internal: Open database
@@ -785,10 +793,10 @@ impl Database {
             cache_capacity: DEFAULT_QUERY_CACHE_SIZE,
             cache_enabled: true, // Default: cache enabled
             stats: Arc::new(DatabaseStats::default()),
-            watcher: None,  // Set by open_with_options if auto_reload enabled
+            watcher: None, // Set by open_with_options if auto_reload enabled
             cache_generation: Arc::new(AtomicU64::new(0)), // Generation 0 for non-watched databases
-            source_path: None,  // Set by open_with_options
-            open_options: DatabaseOptions::default(),  // Set by open_with_options
+            source_path: None, // Set by open_with_options
+            open_options: DatabaseOptions::default(), // Set by open_with_options
         };
 
         // Now we can safely get 'static reference since db owns the data
@@ -852,25 +860,55 @@ impl Database {
     /// of 80-95% are typical in log processing workloads.
     ///
     /// If auto-reload is enabled, this transparently uses the latest
-    /// reloaded database.
+    /// reloaded database with **zero locks** on the query path.
+    ///
+    /// ## Auto-Reload Performance
+    ///
+    /// When auto-reload is enabled:
+    /// - **Per-query overhead: ~1-2ns** (atomic generation check)
+    /// - No locks acquired on query path
+    /// - Thread-local Arc caching eliminates atomic operations after reload check
+    /// - Cache invalidation is automatic on database reload
     ///
     /// Returns `Ok(Some(result))` if found, `Ok(None)` if not found.
     pub fn lookup(&self, query: &str) -> Result<Option<QueryResult>, DatabaseError> {
-        // If watching is enabled, delegate to the current database in RwLock
-        // (which has watcher=None to avoid infinite recursion)
+        // If watching is enabled, use lock-free Arc access
+        // Each thread caches an Arc pointer locally and refreshes when generation changes
         if let Some(ref watcher) = self.watcher {
-            let current = watcher.current.read().unwrap();
-            return current.lookup(query);
+            // Check generation (~1ns atomic load with Acquire ordering)
+            let current_gen = watcher.generation.load(Ordering::Acquire);
+
+            // Check if database has been reloaded since last query
+            let needs_refresh = LOCAL_GENERATION.with(|local_gen| {
+                let last_gen = local_gen.get();
+                if last_gen != current_gen {
+                    local_gen.set(current_gen);
+                    true
+                } else {
+                    false
+                }
+            });
+
+            if needs_refresh {
+                // Database changed - refresh thread-local Arc pointer
+                LOCAL_DB.with(|local_db| {
+                    *local_db.borrow_mut() = Some(watcher.current.load_full());
+                });
+
+                // Clear cache since data changed
+                self.with_cache(|cache| cache.clear());
+            }
+
+            // Use thread-local cached Arc (zero atomic operations!)
+            return LOCAL_DB.with(|local_db| local_db.borrow().as_ref().unwrap().lookup(query));
         }
 
         // No watching - proceed with normal lookup
         // Check thread-local cache first
-        if let Some(cached) = self.with_cache(|cache| cache.get(query).cloned()) {
-            if let Some(result) = cached {
-                self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
-                self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Some(result));
-            }
+        if let Some(Some(result)) = self.with_cache(|cache| cache.get(query).cloned()) {
+            self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
+            self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(result));
         }
 
         // Cache miss (or cache disabled) - perform actual lookup
@@ -885,22 +923,30 @@ impl Database {
         if self.cache_enabled {
             self.stats.cache_misses.fetch_add(1, Ordering::Relaxed);
         }
-        
+
         match &result {
             Some(QueryResult::Ip { .. }) => {
                 self.stats.ip_queries.fetch_add(1, Ordering::Relaxed);
-                self.stats.queries_with_match.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .queries_with_match
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Some(QueryResult::Pattern { .. }) => {
                 self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
-                self.stats.queries_with_match.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .queries_with_match
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Some(QueryResult::NotFound) => {
                 self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
-                self.stats.queries_without_match.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .queries_without_match
+                    .fetch_add(1, Ordering::Relaxed);
             }
             None => {
-                self.stats.queries_without_match.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .queries_without_match
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
 
@@ -948,10 +994,8 @@ impl Database {
         let query = addr.to_string();
 
         // Check thread-local cache first
-        if let Some(cached) = self.with_cache(|cache| cache.get(&query).cloned()) {
-            if let Some(result) = cached {
-                return Ok(Some(result));
-            }
+        if let Some(Some(result)) = self.with_cache(|cache| cache.get(&query).cloned()) {
+            return Ok(Some(result));
         }
 
         // Cache miss - do actual lookup
@@ -1087,10 +1131,8 @@ impl Database {
     /// Returns matching pattern IDs and associated data.
     pub fn lookup_string(&self, pattern: &str) -> Result<Option<QueryResult>, DatabaseError> {
         // Check thread-local cache first
-        if let Some(cached) = self.with_cache(|cache| cache.get(pattern).cloned()) {
-            if let Some(result) = cached {
-                return Ok(Some(result));
-            }
+        if let Some(Some(result)) = self.with_cache(|cache| cache.get(pattern).cloned()) {
+            return Ok(Some(result));
         }
 
         // Cache miss - do actual lookup
@@ -1522,9 +1564,10 @@ impl Database {
         let (event_tx, event_rx) = mpsc::channel();
 
         // Canonicalize path to resolve symlinks (important on macOS)
-        let canonical_path = path.canonicalize()
+        let canonical_path = path
+            .canonicalize()
             .map_err(|e| DatabaseError::Io(format!("Failed to canonicalize path: {}", e)))?;
-        
+
         // Create watcher - watch the file directly
         // On macOS/FSEvents, this still detects atomic renames (mv new.mxy db.mxy)
         let mut watcher = RecommendedWatcher::new(event_tx, Config::default())
@@ -1537,15 +1580,18 @@ impl Database {
         // Open database fresh (not cloned) to get independent mmap
         // This ensures reloads get truly new data, not shared mmap pages
         let initial_db = Database::open_with_options(options.clone())?;
-        let current_db = Arc::new(RwLock::new(initial_db));
-        
+
+        // Use ArcSwap for lock-free atomic pointer swapping
+        let current_db = Arc::new(ArcSwap::from_pointee(initial_db));
+
         // Create shared generation counter for cache invalidation
         // Starts at 1 (generation 0 is for non-watched databases)
         let generation = Arc::new(AtomicU64::new(1));
-        
+
         let state = Arc::new(WatcherState {
             current: Arc::clone(&current_db),
             generation: Arc::clone(&generation),
+            reload_callback: options.reload_callback.clone(),
             _thread: WatcherThread {
                 shutdown_tx: shutdown_tx.clone(),
                 handle: None,
@@ -1553,8 +1599,9 @@ impl Database {
             _watcher: watcher,
         });
 
-        // Clone state for thread
+        // Clone state and path for thread
         let thread_state = Arc::clone(&state);
+        let thread_path = canonical_path.clone();
 
         // Spawn watcher thread
         let handle = thread::spawn(move || {
@@ -1583,20 +1630,45 @@ impl Database {
                                 let mut reload_options = options.clone();
                                 reload_options.auto_reload = false;
                                 let reload_result = Database::open_with_options(reload_options);
-                                
+
                                 match reload_result {
                                     Ok(mut new_db) => {
                                         // Increment generation to invalidate all thread-local caches
                                         thread_state.generation.fetch_add(1, Ordering::Release);
-                                        
+                                        let new_generation =
+                                            thread_state.generation.load(Ordering::Acquire);
+
                                         // Share generation counter with reloaded database
-                                        new_db.cache_generation = Arc::clone(&thread_state.generation);
-                                        
-                                        // Swap in new database
-                                        *thread_state.current.write().unwrap() = new_db;
+                                        new_db.cache_generation =
+                                            Arc::clone(&thread_state.generation);
+
+                                        // Atomically swap in new database (lock-free!)
+                                        // Old database stays alive until all thread-local Arc refs are dropped
+                                        thread_state.current.store(Arc::new(new_db));
+
+                                        // Invoke callback if present
+                                        if let Some(ref callback) = thread_state.reload_callback {
+                                            callback(ReloadEvent {
+                                                path: thread_path.clone(),
+                                                success: true,
+                                                error: None,
+                                                generation: new_generation,
+                                            });
+                                        }
                                     }
-                                    Err(_e) => {
+                                    Err(e) => {
                                         // Reload failed - keep old database
+                                        // Invoke callback if present
+                                        if let Some(ref callback) = thread_state.reload_callback {
+                                            let current_generation =
+                                                thread_state.generation.load(Ordering::Acquire);
+                                            callback(ReloadEvent {
+                                                path: thread_path.clone(),
+                                                success: false,
+                                                error: Some(e.to_string()),
+                                                generation: current_generation,
+                                            });
+                                        }
                                     }
                                 }
                                 last_event_time = None;
@@ -1764,5 +1836,74 @@ mod tests {
             result.is_none() || matches!(result, Some(QueryResult::NotFound)),
             "Domain should not match in IP-only database"
         );
+    }
+
+    #[test]
+    fn test_reload_callback() {
+        use crate::mmdb_builder::MmdbBuilder;
+        use crate::{glob::MatchMode, DataValue};
+        use std::collections::HashMap;
+        use std::fs;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        // Create a test database file
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.mxy");
+
+        // Build a simple test database with a literal string
+        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut data = HashMap::new();
+        data.insert("test".to_string(), DataValue::String("initial".to_string()));
+        builder.add_literal("example.com", data).unwrap();
+        let bytes = builder.build().unwrap();
+        fs::write(&db_path, bytes).unwrap();
+
+        // Track reload events
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = Arc::clone(&events);
+
+        // Open with auto-reload and callback
+        let db = Database::from(db_path.clone())
+            .auto_reload()
+            .on_reload(move |event: ReloadEvent| {
+                events_clone.lock().unwrap().push(event);
+            })
+            .open()
+            .unwrap();
+
+        // Verify initial lookup works
+        let result = db.lookup("example.com").unwrap();
+        assert!(result.is_some(), "Initial lookup should succeed");
+
+        // Modify the database file (trigger reload)
+        std::thread::sleep(Duration::from_millis(100));
+        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut data = HashMap::new();
+        data.insert(
+            "test".to_string(),
+            DataValue::String("reloaded".to_string()),
+        );
+        builder.add_literal("example.org", data).unwrap();
+        let bytes = builder.build().unwrap();
+        fs::write(&db_path, bytes).unwrap();
+
+        // Wait for reload to complete (file watcher has 200ms debounce + reload time)
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Check that callback was invoked
+        let events_list = events.lock().unwrap();
+        assert!(!events_list.is_empty(), "Callback should have been invoked");
+
+        let last_event = events_list.last().unwrap();
+        assert!(last_event.success, "Reload should have succeeded");
+        assert!(last_event.error.is_none(), "No error should be present");
+        assert!(
+            last_event.generation > 0,
+            "Generation should have incremented"
+        );
+        assert_eq!(last_event.path, db_path.canonicalize().unwrap());
+
+        drop(db);
     }
 }

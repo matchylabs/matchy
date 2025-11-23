@@ -7,6 +7,7 @@ use matchy::extractor::Extractor;
 use matchy::{processing, Database, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -69,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let worker = processing::Worker::builder()
                 .extractor(extractor)
-                .add_database("threats", db)
+                .add_database("threats", Arc::new(db))
                 .build();
 
             Ok::<_, String>(worker)

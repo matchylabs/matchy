@@ -155,10 +155,11 @@ pub fn process_parallel(
     };
     let overall_start = _overall_start;
 
-    // Open database once and share via Arc across all workers (thread-safe!)
-    let db = Arc::new(init_worker_database(database_path, cache_size)
-        .context("Failed to open database")?);
-    
+    // Open database once and wrap in Arc for efficient sharing
+    let db = Arc::new(
+        init_worker_database(database_path, cache_size).context("Failed to open database")?,
+    );
+
     let ext_config = extractor_config.clone();
 
     let result = matchy::processing::process_files_parallel(
@@ -166,14 +167,14 @@ pub fn process_parallel(
         num_readers_opt, // Library will simulate routing if None
         Some(num_workers),
         move || {
-            // Clone the Database (cheap - shares mmap and stats via Arc)
-            let db_clone = (*db).clone();
+            // Clone the Arc (cheap - just increments refcount)
+            let db_clone = Arc::clone(&db);
 
             // Create extractor
             let extractor = create_extractor_for_db(&db_clone, &ext_config)
                 .map_err(|e| format!("Extractor init failed: {}", e))?;
 
-            // Create worker with cloned database handle
+            // Create worker with shared database
             let worker = matchy::processing::Worker::builder()
                 .extractor(extractor)
                 .add_database("default", db_clone)

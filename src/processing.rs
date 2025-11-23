@@ -11,13 +11,14 @@
 //! ```rust,no_run
 //! use matchy::{Database, processing};
 //! use matchy::extractor::Extractor;
+//! use std::sync::Arc;
 //!
 //! let db = Database::from("threats.mxy").open()?;
 //! let extractor = Extractor::new()?;
 //!
 //! let mut worker = processing::Worker::builder()
 //!     .extractor(extractor)
-//!     .add_database("threats", db)
+//!     .add_database("threats", Arc::new(db))
 //!     .build();
 //!
 //! let reader = processing::FileReader::new("access.log.gz", 128 * 1024)?;
@@ -379,13 +380,14 @@ impl Iterator for DataBatchIter {
 /// ```rust,no_run
 /// use matchy::{Database, processing};
 /// use matchy::extractor::Extractor;
+/// use std::sync::Arc;
 ///
 /// let db = Database::from("threats.mxy").open()?;
 /// let extractor = Extractor::new()?;
 ///
 /// let mut worker = processing::Worker::builder()
 ///     .extractor(extractor)
-///     .add_database("threats", db)
+///     .add_database("threats", Arc::new(db))
 ///     .build();
 ///
 /// // Process raw bytes
@@ -399,7 +401,7 @@ impl Iterator for DataBatchIter {
 /// ```
 pub struct Worker {
     extractor: Extractor,
-    databases: Vec<(String, Database)>, // (database_id, database)
+    databases: Vec<(String, Arc<Database>)>, // (database_id, database)
     stats: WorkerStats,
 }
 
@@ -419,10 +421,11 @@ impl Worker {
     /// ```rust,no_run
     /// # use matchy::{Database, processing};
     /// # use matchy::extractor::Extractor;
+    /// # use std::sync::Arc;
     /// # let db = Database::from("db.mxy").open()?;
     /// # let extractor = Extractor::new()?;
     /// # let mut worker = processing::Worker::builder()
-    /// #     .extractor(extractor).add_database("db", db).build();
+    /// #     .extractor(extractor).add_database("db", Arc::new(db)).build();
     /// let text = "Check 192.168.1.1";
     /// let matches = worker.process_bytes(text.as_bytes())?;
     ///
@@ -537,10 +540,11 @@ impl Worker {
     /// ```rust,no_run
     /// # use matchy::{Database, processing};
     /// # use matchy::extractor::Extractor;
+    /// # use std::sync::Arc;
     /// # let db = Database::from("db.mxy").open()?;
     /// # let extractor = Extractor::new()?;
     /// # let mut worker = processing::Worker::builder()
-    /// #     .extractor(extractor).add_database("db", db).build();
+    /// #     .extractor(extractor).add_database("db", Arc::new(db)).build();
     /// # let reader = processing::FileReader::new("data.log", 128*1024)?;
     /// # let batch = reader.batches().next().unwrap()?;
     /// let matches = worker.process_batch(&batch)?;
@@ -582,6 +586,7 @@ impl Worker {
 /// ```rust,no_run
 /// use matchy::{Database, processing};
 /// use matchy::extractor::Extractor;
+/// use std::sync::Arc;
 ///
 /// let threats = Database::from("threats.mxy").open()?;
 /// let allowlist = Database::from("allowlist.mxy").open()?;
@@ -589,14 +594,14 @@ impl Worker {
 ///
 /// let worker = processing::Worker::builder()
 ///     .extractor(extractor)
-///     .add_database("threats", threats)
-///     .add_database("allowlist", allowlist)
+///     .add_database("threats", Arc::new(threats))
+///     .add_database("allowlist", Arc::new(allowlist))
 ///     .build();
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct WorkerBuilder {
     extractor: Option<Extractor>,
-    databases: Vec<(String, Database)>,
+    databases: Vec<(String, Arc<Database>)>,
 }
 
 impl WorkerBuilder {
@@ -617,7 +622,8 @@ impl WorkerBuilder {
     /// Add a database with an identifier
     ///
     /// The identifier is included in match results to show which database matched.
-    pub fn add_database(mut self, id: impl Into<String>, database: Database) -> Self {
+    /// The database is wrapped in Arc for efficient sharing across workers.
+    pub fn add_database(mut self, id: impl Into<String>, database: Arc<Database>) -> Self {
         self.databases.push((id.into(), database));
         self
     }
@@ -984,6 +990,7 @@ fn count_files_to_chunk(
 ///
 /// ```rust,no_run
 /// use matchy::{Database, processing, extractor::Extractor};
+/// use std::sync::Arc;
 ///
 /// let files = vec!["access.log".into(), "errors.log".into()];
 ///
@@ -999,7 +1006,7 @@ fn count_files_to_chunk(
 ///         
 ///         let worker = processing::Worker::builder()
 ///             .extractor(extractor)
-///             .add_database("threats", db)
+///             .add_database("threats", Arc::new(db))
 ///             .build();
 ///         
 ///         Ok::<_, String>(worker)

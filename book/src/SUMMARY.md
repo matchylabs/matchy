@@ -20,6 +20,7 @@
     * [Pattern Matching](guide/patterns.md)
     * [Data Types and Values](guide/data-types.md)
     * [Query Result Caching](guide/caching.md)
+    * [Auto-Reload and Callbacks](guide/auto-reload.md)
     * [Pattern Extraction](guide/extraction.md)
     * [MMDB Compatibility](guide/mmdb-compatibility.md)
     * [Migrating from libmaxminddb](guide/migrating-libmaxminddb.md)

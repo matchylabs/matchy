@@ -220,6 +220,65 @@ typedef struct matchy_builder_t {
 } matchy_builder_t;
 
 /*
+ Reload callback event information
+
+ Information passed to reload callbacks when database reloads occur.
+ */
+typedef struct matchy_reload_event_t {
+  /*
+   Path to database file (null-terminated C string)
+   Valid only for duration of callback - copy if needed
+   */
+  const char *path;
+  /*
+   Whether reload succeeded
+   true = successful reload, false = reload failed
+   */
+  bool success;
+  /*
+   Error message if reload failed (null if success)
+   Valid only for duration of callback - copy if needed
+   */
+  const char *error;
+  /*
+   Generation counter (increments on each successful reload)
+   Can be used to detect if database has changed since last check
+   */
+  uint64_t generation;
+} matchy_reload_event_t;
+
+/*
+ Reload callback function type
+
+ Called when database reload completes (success or failure).
+ Called from watcher thread - keep processing minimal!
+
+ # Parameters
+ * `event` - Reload event information (valid only during callback)
+ * `user_data` - User-provided context pointer from matchy_open_options_t
+
+ # Safety
+ * Callback must be thread-safe
+ * Do not call matchy_* functions from callback (potential deadlock)
+ * Copy event.path and event.error if you need them after callback returns
+ * user_data must match what was provided in options
+
+ # Example
+ ```c
+ void on_reload(const matchy_reload_event_t *event, void *user_data) {
+     if (event->success) {
+         printf("Database reloaded: %s (generation %lu)\n",
+                event->path, event->generation);
+     } else {
+         fprintf(stderr, "Reload failed: %s - %s\n",
+                 event->path, event->error);
+     }
+ }
+ ```
+ */
+typedef void (*matchy_reload_callback_t)(const struct matchy_reload_event_t *event, void *user_data);
+
+/*
  Database opening options
 
  Configure how databases are loaded, including cache settings and validation.
@@ -231,6 +290,29 @@ typedef struct matchy_open_options_t {
    Default: 10000
    */
   uint32_t cache_capacity;
+  /*
+   Enable automatic reload when database file changes
+   false = no watching (default), true = auto-reload on file changes
+   Default: false
+
+   When enabled, the database watches its source file and automatically
+   reloads when changes are detected. All queries transparently use the
+   latest version. Adds ~10-20ns overhead per query due to read lock.
+   */
+  bool auto_reload;
+  /*
+   Reload callback function (optional)
+   Called when database reload completes (success or failure)
+   Set to NULL to disable callback
+   Default: NULL
+   */
+  matchy_reload_callback_t reload_callback;
+  /*
+   User data pointer passed to reload callback
+   Can be any pointer - callback receives it as-is
+   Default: NULL
+   */
+  void *reload_callback_user_data;
 } matchy_open_options_t;
 
 /*
@@ -488,6 +570,7 @@ void matchy_builder_free(struct matchy_builder_t *builder);
 
  Sets default values:
  - cache_capacity = 10000
+ - auto_reload = false
 
  # Parameters
  * `options` - Pointer to options struct to initialize (must not be NULL)
@@ -500,6 +583,7 @@ void matchy_builder_free(struct matchy_builder_t *builder);
  matchy_open_options_t opts;
  matchy_init_open_options(&opts);
  opts.cache_capacity = 100000;  // Custom size
+ opts.auto_reload = true;        // Enable auto-reload
  matchy_t *db = matchy_open_with_options("threats.mxy", &opts);
  ```
  */
@@ -508,7 +592,7 @@ void matchy_init_open_options(struct matchy_open_options_t *options);
 /*
  Open database with custom options
 
- Opens a database file with configurable cache size and validation settings.
+ Opens a database file with configurable cache size, auto-reload, and validation settings.
 
  # Parameters
  * `filename` - Path to database file (null-terminated C string, must not be NULL)
@@ -524,16 +608,21 @@ void matchy_init_open_options(struct matchy_open_options_t *options);
 
  # Example
  ```c
- // High-performance mode
+ // High-performance mode with auto-reload
  matchy_open_options_t opts;
  matchy_init_open_options(&opts);
  opts.cache_capacity = 100000; // Large cache
+ opts.auto_reload = true;      // Watch file for changes
 
  matchy_t *db = matchy_open_with_options("threats.mxy", &opts);
  if (db == NULL) {
      fprintf(stderr, "Failed to open database\n");
      return 1;
  }
+
+ // Queries automatically use latest database version
+ matchy_result_t result;
+ matchy_lookup(db, "1.2.3.4", &result);
  ```
  */
 struct matchy_t *matchy_open_with_options(const char *filename, const struct matchy_open_options_t *options);

@@ -8,7 +8,7 @@ fn test_database_is_send_sync() {
     // Compile-time assertion that Database is Send + Sync
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
-    
+
     assert_send::<Database>();
     assert_sync::<Database>();
 }
@@ -19,7 +19,7 @@ fn test_concurrent_queries() {
     let db = Arc::new(
         Database::from("tests/data/GeoLite2-Country.mmdb")
             .open()
-            .expect("Failed to open test database")
+            .expect("Failed to open test database"),
     );
 
     // Spawn multiple threads doing IP lookups
@@ -29,7 +29,13 @@ fn test_concurrent_queries() {
             thread::spawn(move || {
                 // Each thread does 100 queries (mix of IPs)
                 for i in 0..100 {
-                    let ip = format!("{}.{}.{}.{}", 1 + thread_id, i % 256, (i / 256) % 256, i % 128);
+                    let ip = format!(
+                        "{}.{}.{}.{}",
+                        1 + thread_id,
+                        i % 256,
+                        (i / 256) % 256,
+                        i % 128
+                    );
                     let _ = db.lookup(&ip);
                 }
             })
@@ -44,8 +50,11 @@ fn test_concurrent_queries() {
     // Verify stats are sane (8 threads * 100 queries = 800 total)
     let stats = db.stats();
     assert_eq!(stats.total_queries, 800, "Expected 800 total queries");
-    println!("Concurrent test passed: {} queries, {:.1}% cache hit rate",
-             stats.total_queries, stats.cache_hit_rate() * 100.0);
+    println!(
+        "Concurrent test passed: {} queries, {:.1}% cache hit rate",
+        stats.total_queries,
+        stats.cache_hit_rate() * 100.0
+    );
 }
 
 #[test]
@@ -55,7 +64,7 @@ fn test_shared_cache_locality() {
         Database::from("tests/data/GeoLite2-Country.mmdb")
             .cache_capacity(100)
             .open()
-            .expect("Failed to open test database")
+            .expect("Failed to open test database"),
     );
 
     let handles: Vec<_> = (0..4)
@@ -76,12 +85,17 @@ fn test_shared_cache_locality() {
 
     let stats = db.stats();
     assert_eq!(stats.total_queries, 400);
-    
+
     // With thread-local caching, first query in each thread is a miss,
     // subsequent 99 are hits. So: 4 misses + 396 hits
-    assert_eq!(stats.cache_misses, 4, "Expected 4 cache misses (one per thread)");
+    assert_eq!(
+        stats.cache_misses, 4,
+        "Expected 4 cache misses (one per thread)"
+    );
     assert_eq!(stats.cache_hits, 396, "Expected 396 cache hits");
-    
-    println!("Thread-local cache test passed: {:.1}% hit rate", 
-             stats.cache_hit_rate() * 100.0);
+
+    println!(
+        "Thread-local cache test passed: {:.1}% hit rate",
+        stats.cache_hit_rate() * 100.0
+    );
 }

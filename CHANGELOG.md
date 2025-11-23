@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2025-11-23
+
+### Added
+- **Lock-Free Auto-Reload** with zero-overhead database access
+  - Automatic database reloading when file changes are detected
+  - Lock-free Arc swapping using `arc-swap` crate for atomic database updates
+  - Thread-local Arc caching eliminates atomic operations on hot query path
+  - Per-query overhead: ~1-2ns (atomic generation counter check only)
+  - Enable with `Database::from(path).auto_reload().open()`
+  - Graceful database handoff: old database stays alive until all threads finish with it
+  - 200ms debounce prevents rapid reload cycles during file writes
+  - File watching works with atomic renames (e.g., `mv new.mxy db.mxy`)
+  - Scales to 160+ cores without lock contention or cache line ping-ponging
+  
+- **Reload Callbacks** for database change notifications (Rust + C API)
+  - Rust API: `.on_reload()` method accepts closures for reload events
+  - C API: `reload_callback` function pointer in `matchy_open_options_t`
+  - Callback receives: file path, success status, error message (if failed), generation counter
+  - Invoked from watcher thread on both successful and failed reloads
+  - Useful for logging, metrics, and coordinating application state
+  - Thread-safe callback execution with proper error handling
+  - Examples: `examples/c_reload_callback.c`, Rust test in `src/database.rs`
+
+### Performance
+- **Auto-Reload Overhead**: ~1-2ns per query (atomic generation check)
+  - Thread-local Arc pointer caching eliminates repeated atomic loads
+  - Zero locks on query path - pure thread-local access after generation check
+  - Automatic cache invalidation when database reloads
+  - Benchmark: `benches/reload_overhead_bench.rs` measures overhead vs baseline
+
+### Changed
+- **Worker API**: `Worker::add_database()` now accepts `Arc<Database>` instead of `Database`
+  - Eliminates unsafe clone operations that caused segfaults in parallel mode
+  - Multiple workers can efficiently share the same database via Arc
+  - Breaking change: wrap databases in Arc when passing to Worker
+  - Migration: `worker.add_database("id", Arc::new(db))` instead of `worker.add_database("id", db)`
+
+### Fixed
+- **Critical: Segmentation Fault in Parallel Mode**
+  - Fixed unsafe `Clone` implementation on `Database` that used `std::ptr::read()` to bitwise copy `Mmap`
+  - `Mmap` is `Send but not Sync` and does not support bitwise copying
+  - Removed unsafe `Clone` implementations from both `Database` and `Paraglob`
+  - Changed parallel processing to use `Arc<Database>` for safe sharing across threads
+  - All 243 library tests + 34 CLI tests now pass in parallel mode
+
+### Dependencies
+- Added `arc-swap = "1.7"` for lock-free Arc pointer swapping
+
+### Removed
+- Deprecated `Database::open()` method (use `Database::from(path).open()` instead)
+- Unsafe `Clone` implementations on `Database` and `Paraglob` structs
+
 ## [1.2.2] - 2025-11-07
 
 ### Fixed

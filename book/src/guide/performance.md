@@ -321,18 +321,86 @@ std::fs::rename("threats.mxy.tmp", "threats.mxy")?;
 
 Existing processes keep reading the old file until they reopen.
 
-### Hot Reloading
+### Auto-Reload (v1.3.0+)
 
-For zero-downtime updates:
+For zero-downtime updates with automatic reloading:
 
 ```rust
-let db = Arc::new(Database::open("threats.mxy")?);
+// Rust API - automatic reload with ~1-2ns overhead per query
+let db = Database::from("threats.mxy")
+    .auto_reload()  // Enable automatic reloading
+    .open()?;
 
-// In another thread: watch for updates
-// When file changes:
-let new_db = Database::open("threats.mxy")?;
-// Atomically swap the Arc
+// Optional: Get notified when reloads happen
+let db = Database::from("threats.mxy")
+    .auto_reload()
+    .on_reload(|event| {
+        if event.success {
+            println!("Database reloaded: generation {}", event.generation);
+        } else {
+            eprintln!("Reload failed: {:?}", event.error);
+        }
+    })
+    .open()?;
+
+// Database automatically reloads when file changes
+// Queries transparently use the latest version
+let result = db.lookup("192.168.1.1")?;
 ```
+
+**Performance characteristics:**
+- Per-query overhead: ~1-2ns (atomic generation counter check)
+- Zero locks on query path after thread-local Arc is cached
+- Old database stays alive until all threads finish with it
+- 200ms debounce prevents rapid reload cycles
+- Scales to 160+ cores without contention
+
+**C API:**
+
+```c
+#include <matchy/matchy.h>
+
+// Callback for reload notifications
+void on_reload(const matchy_reload_event_t *event, void *user_data) {
+    if (event->success) {
+        printf("Reloaded: %s (gen %lu)\n", event->path, event->generation);
+    } else {
+        fprintf(stderr, "Reload failed: %s\n", event->error);
+    }
+}
+
+int main() {
+    // Configure auto-reload with callback
+    matchy_open_options_t opts;
+    matchy_init_open_options(&opts);
+    opts.auto_reload = true;
+    opts.reload_callback = on_reload;
+    opts.reload_callback_user_data = NULL;  // Optional context
+    
+    matchy_t *db = matchy_open_with_options("threats.mxy", &opts);
+    
+    // Queries automatically use latest database
+    matchy_result_t result;
+    matchy_lookup(db, "192.168.1.1", &result);
+    
+    matchy_close(db);
+}
+```
+
+**How it works:**
+
+1. File watcher monitors database file using OS notifications
+2. On file change, new database is loaded in background thread
+3. New database is atomically swapped using lock-free Arc pointer
+4. Each query thread checks generation counter (~1ns atomic load)
+5. If changed, thread updates its local Arc cache and clears query cache
+6. All subsequent queries use thread-local Arc (zero overhead!)
+
+**When to use:**
+- Production systems requiring zero downtime
+- Threat intelligence feeds updating hourly/daily
+- GeoIP databases refreshed periodically
+- Any scenario where manual reload coordination is complex
 
 Old queries complete with the old database. New queries use the new database.
 

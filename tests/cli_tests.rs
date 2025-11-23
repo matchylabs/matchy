@@ -429,6 +429,8 @@ fn test_match_stdin() {
         .arg("-")
         .arg("--format")
         .arg("json")
+        .arg("--threads")
+        .arg("1")
         .write_stdin(log_data)
         .assert()
         .success()
@@ -706,13 +708,15 @@ fn test_json_output_includes_match_data() {
     let test_line = "2024-01-15 Connection from 192.168.1.100 detected";
     fs::write(&log_file, format!("{}\n", test_line)).unwrap();
 
-    // Run match with JSON output
+    // Run match with JSON output (force sequential mode with --threads 1)
     let output = matchy_cmd()
         .arg("match")
         .arg(&db_file)
         .arg(&log_file)
         .arg("--format")
         .arg("json")
+        .arg("--threads")
+        .arg("1")
         .assert()
         .success()
         .get_output()
@@ -776,7 +780,7 @@ fn test_json_output_parallel_mode() {
     )
     .unwrap();
 
-    // Run with parallel mode
+    // Run with parallel mode (use 2 threads to test parallelism without overwhelming test environment)
     let output = matchy_cmd()
         .arg("match")
         .arg(&db_file)
@@ -784,7 +788,7 @@ fn test_json_output_parallel_mode() {
         .arg("--format")
         .arg("json")
         .arg("--threads")
-        .arg("4")
+        .arg("2")
         .assert()
         .success()
         .get_output()

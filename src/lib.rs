@@ -29,13 +29,13 @@
 //! # std::fs::write(&tmp_path, db_bytes)?;
 //!
 //! // Query the database
-//! # let db = Database::open(tmp_path.to_str().unwrap())?;
+//! # let db = Database::from(tmp_path.to_str().unwrap()).open()?;
 //! # // Cleanup
 //! # let _ = std::fs::remove_file(&tmp_path);
 //! #
 //! # // For documentation purposes, show it as:
 //! # /*
-//! let db = Database::open("threats.db")?;
+//! let db = Database::from("threats.db").open()?;
 //!
 //! // Automatic IP detection
 //! if let Some(result) = db.lookup("1.2.3.4")? {

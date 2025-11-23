@@ -8,7 +8,7 @@ use crate::database::{Database as RustDatabase, QueryResult};
 use crate::glob::MatchMode;
 use crate::mmdb_builder::MmdbBuilder;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
@@ -366,6 +366,59 @@ pub unsafe extern "C" fn matchy_builder_free(builder: *mut matchy_builder_t) {
 // DATABASE QUERYING API
 // ============================================================================
 
+/// Reload callback event information
+///
+/// Information passed to reload callbacks when database reloads occur.
+#[repr(C)]
+pub struct matchy_reload_event_t {
+    /// Path to database file (null-terminated C string)
+    /// Valid only for duration of callback - copy if needed
+    pub path: *const c_char,
+
+    /// Whether reload succeeded
+    /// true = successful reload, false = reload failed
+    pub success: bool,
+
+    /// Error message if reload failed (null if success)
+    /// Valid only for duration of callback - copy if needed
+    pub error: *const c_char,
+
+    /// Generation counter (increments on each successful reload)
+    /// Can be used to detect if database has changed since last check
+    pub generation: u64,
+}
+
+/// Reload callback function type
+///
+/// Called when database reload completes (success or failure).
+/// Called from watcher thread - keep processing minimal!
+///
+/// # Parameters
+/// * `event` - Reload event information (valid only during callback)
+/// * `user_data` - User-provided context pointer from matchy_open_options_t
+///
+/// # Safety
+/// * Callback must be thread-safe
+/// * Do not call matchy_* functions from callback (potential deadlock)
+/// * Copy event.path and event.error if you need them after callback returns
+/// * user_data must match what was provided in options
+///
+/// # Example
+/// ```c
+/// void on_reload(const matchy_reload_event_t *event, void *user_data) {
+///     if (event->success) {
+///         printf("Database reloaded: %s (generation %lu)\n",
+///                event->path, event->generation);
+///     } else {
+///         fprintf(stderr, "Reload failed: %s - %s\n",
+///                 event->path, event->error);
+///     }
+/// }
+/// ```
+#[allow(non_camel_case_types)]
+pub type matchy_reload_callback_t =
+    Option<unsafe extern "C" fn(event: *const matchy_reload_event_t, user_data: *mut c_void)>;
+
 /// Database opening options
 ///
 /// Configure how databases are loaded, including cache settings and validation.
@@ -375,12 +428,35 @@ pub struct matchy_open_options_t {
     /// 0 = disable cache, >0 = cache this many entries
     /// Default: 10000
     pub cache_capacity: u32,
+
+    /// Enable automatic reload when database file changes
+    /// false = no watching (default), true = auto-reload on file changes
+    /// Default: false
+    ///
+    /// When enabled, the database watches its source file and automatically
+    /// reloads when changes are detected. All queries transparently use the
+    /// latest version. Adds ~10-20ns overhead per query due to read lock.
+    pub auto_reload: bool,
+
+    /// Reload callback function (optional)
+    /// Called when database reload completes (success or failure)
+    /// Set to NULL to disable callback
+    /// Default: NULL
+    pub reload_callback: matchy_reload_callback_t,
+
+    /// User data pointer passed to reload callback
+    /// Can be any pointer - callback receives it as-is
+    /// Default: NULL
+    pub reload_callback_user_data: *mut c_void,
 }
 
 impl Default for matchy_open_options_t {
     fn default() -> Self {
         Self {
             cache_capacity: 10000,
+            auto_reload: false,
+            reload_callback: None, // None represents NULL function pointer
+            reload_callback_user_data: ptr::null_mut(),
         }
     }
 }
@@ -389,6 +465,7 @@ impl Default for matchy_open_options_t {
 ///
 /// Sets default values:
 /// - cache_capacity = 10000
+/// - auto_reload = false
 ///
 /// # Parameters
 /// * `options` - Pointer to options struct to initialize (must not be NULL)
@@ -401,6 +478,7 @@ impl Default for matchy_open_options_t {
 /// matchy_open_options_t opts;
 /// matchy_init_open_options(&opts);
 /// opts.cache_capacity = 100000;  // Custom size
+/// opts.auto_reload = true;        // Enable auto-reload
 /// matchy_t *db = matchy_open_with_options("threats.mxy", &opts);
 /// ```
 #[no_mangle]
@@ -413,7 +491,7 @@ pub unsafe extern "C" fn matchy_init_open_options(options: *mut matchy_open_opti
 
 /// Open database with custom options
 ///
-/// Opens a database file with configurable cache size and validation settings.
+/// Opens a database file with configurable cache size, auto-reload, and validation settings.
 ///
 /// # Parameters
 /// * `filename` - Path to database file (null-terminated C string, must not be NULL)
@@ -429,16 +507,21 @@ pub unsafe extern "C" fn matchy_init_open_options(options: *mut matchy_open_opti
 ///
 /// # Example
 /// ```c
-/// // High-performance mode
+/// // High-performance mode with auto-reload
 /// matchy_open_options_t opts;
 /// matchy_init_open_options(&opts);
 /// opts.cache_capacity = 100000; // Large cache
+/// opts.auto_reload = true;      // Watch file for changes
 ///
 /// matchy_t *db = matchy_open_with_options("threats.mxy", &opts);
 /// if (db == NULL) {
 ///     fprintf(stderr, "Failed to open database\n");
 ///     return 1;
 /// }
+///
+/// // Queries automatically use latest database version
+/// matchy_result_t result;
+/// matchy_lookup(db, "1.2.3.4", &result);
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn matchy_open_with_options(
@@ -463,6 +546,42 @@ pub unsafe extern "C" fn matchy_open_with_options(
         opener = opener.no_cache();
     } else {
         opener = opener.cache_capacity(opts.cache_capacity as usize);
+    }
+
+    if opts.auto_reload {
+        opener = opener.auto_reload();
+    }
+
+    // Set up reload callback if provided (check for non-null function pointer)
+    if let Some(callback_fn) = opts.reload_callback {
+        // Safety: We trust that the C callback is thread-safe (documented requirement)
+        // Cast pointer to usize for Send+Sync (usize is Copy and thread-safe)
+        let user_data = opts.reload_callback_user_data as usize;
+        opener = opener.on_reload(move |event: crate::database::ReloadEvent| {
+            // Convert Rust ReloadEvent to C matchy_reload_event_t
+            let c_path = std::ffi::CString::new(event.path.to_string_lossy().as_ref())
+                .unwrap_or_else(|_| std::ffi::CString::new("<invalid path>").unwrap());
+
+            let c_error = event.error.as_ref().map(|e| {
+                std::ffi::CString::new(e.as_str())
+                    .unwrap_or_else(|_| std::ffi::CString::new("<invalid error>").unwrap())
+            });
+
+            let c_event = matchy_reload_event_t {
+                path: c_path.as_ptr(),
+                success: event.success,
+                error: c_error.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                generation: event.generation,
+            };
+
+            // Call C callback
+            // Safety: callback came from C and must be thread-safe (documented requirement)
+            unsafe {
+                callback_fn(&c_event as *const _, user_data as *mut c_void);
+            }
+
+            // c_path and c_error dropped here, so C callback must not retain pointers
+        });
     }
 
     match opener.open() {

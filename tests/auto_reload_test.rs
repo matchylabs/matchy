@@ -1,4 +1,4 @@
-use matchy::{Database, DatabaseBuilder, DataValue, MatchMode};
+use matchy::{DataValue, Database, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 use std::fs;
 use std::thread;
@@ -25,10 +25,7 @@ fn test_auto_reload_basic() {
     fs::write(&db_path, &db_bytes).unwrap();
 
     // Open with auto-reload enabled
-    let db = Database::from(&db_path)
-        .auto_reload()
-        .open()
-        .unwrap();
+    let db = Database::from(&db_path).auto_reload().open().unwrap();
 
     // Give watcher thread time to fully initialize and start watching
     thread::sleep(Duration::from_millis(500));
@@ -43,7 +40,7 @@ fn test_auto_reload_basic() {
     data2.insert("value".to_string(), DataValue::String("second".to_string()));
     builder2.add_entry("1.2.3.4", data2).unwrap();
     let db_bytes2 = builder2.build().unwrap();
-    
+
     // Write to temp file then atomically rename (proper way to update databases)
     let temp_new_path = temp_dir.path().join("test_new.mxy");
     fs::write(&temp_new_path, &db_bytes2).unwrap();
@@ -92,7 +89,7 @@ fn test_no_auto_reload_without_flag() {
     data2.insert("value".to_string(), DataValue::String("second".to_string()));
     builder2.add_entry("1.2.3.4", data2).unwrap();
     let db_bytes2 = builder2.build().unwrap();
-    
+
     // Write to temp file then atomically rename
     let temp_new = NamedTempFile::new().unwrap();
     fs::write(temp_new.path(), &db_bytes2).unwrap();
@@ -103,11 +100,16 @@ fn test_no_auto_reload_without_flag() {
 
     // Should still see OLD data (no reload)
     let result = db.lookup("1.2.3.4").unwrap();
-    if let Some(matchy::QueryResult::Ip { data, .. }) = result {
-        if let DataValue::Map(map) = data {
-            if let Some(DataValue::String(s)) = map.get("value") {
-                assert_eq!(s, "first", "Database should NOT have reloaded without auto_reload flag");
-            }
+    if let Some(matchy::QueryResult::Ip {
+        data: DataValue::Map(map),
+        ..
+    }) = result
+    {
+        if let Some(DataValue::String(s)) = map.get("value") {
+            assert_eq!(
+                s, "first",
+                "Database should NOT have reloaded without auto_reload flag"
+            );
         }
     }
 }

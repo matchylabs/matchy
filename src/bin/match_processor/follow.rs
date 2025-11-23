@@ -288,6 +288,12 @@ pub fn follow_files_parallel(
 
     let output_json = output_format == "json";
 
+    // Open database once and wrap in Arc for efficient sharing across all workers
+    let db = Arc::new(
+        super::parallel::init_worker_database(database_path, cache_size)
+            .context("Failed to open database")?,
+    );
+
     // Create channels for pipeline
     let work_queue_capacity = num_threads * 4;
     let result_queue_capacity = 1000;
@@ -320,7 +326,7 @@ pub fn follow_files_parallel(
     for worker_id in 0..num_threads {
         let work_rx = Arc::clone(&work_rx);
         let result_tx = result_tx.clone();
-        let database_path = database_path.to_owned();
+        let db_clone = Arc::clone(&db); // Clone the Arc, not the Database
         let extractor_config = extractor_config.clone();
 
         let handle = thread::spawn(move || {
@@ -329,8 +335,7 @@ pub fn follow_files_parallel(
                 worker_id,
                 work_rx,
                 result_tx,
-                database_path,
-                cache_size,
+                db_clone,
                 show_stats,
                 extractor_config,
             )
@@ -467,26 +472,12 @@ fn worker_thread_follow(
     worker_id: usize,
     work_rx: Arc<Mutex<Receiver<Option<super::parallel::DataBatch>>>>,
     result_tx: SyncSender<Option<super::parallel::WorkerMessage>>,
-    database_path: PathBuf,
-    cache_size: usize,
+    db: Arc<matchy::Database>, // Receive shared Database wrapped in Arc
     _show_stats: bool,
     extractor_config: super::parallel::ExtractorConfig,
 ) -> super::parallel::WorkerStats {
     use super::parallel::{
-        build_match_result, create_extractor_for_db, init_worker_database, MatchBuffers,
-        WorkerMessage, WorkerStats,
-    };
-
-    // Initialize database
-    let db = match init_worker_database(&database_path, cache_size) {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!(
-                "[ERROR] Worker {} failed to open database: {}",
-                worker_id, e
-            );
-            return WorkerStats::default();
-        }
+        build_match_result, create_extractor_for_db, MatchBuffers, WorkerMessage, WorkerStats,
     };
 
     // Create extractor
@@ -501,10 +492,10 @@ fn worker_thread_follow(
         }
     };
 
-    // Use library's Worker infrastructure
+    // Use library's Worker infrastructure with shared database
     let mut worker = matchy::processing::Worker::builder()
         .extractor(extractor)
-        .add_database("default", db)
+        .add_database("default", db) // Already wrapped in Arc
         .build();
     let mut last_progress_update = Instant::now();
     let progress_interval = Duration::from_millis(100);
