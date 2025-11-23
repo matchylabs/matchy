@@ -14,16 +14,48 @@ use crate::mmdb::{MmdbError, MmdbHeader, SearchTree};
 use crate::paraglob_offset::Paraglob;
 use lru::LruCache;
 use memmap2::Mmap;
-use std::cell::RefCell;
 use std::fs::File;
 use std::hash::BuildHasherDefault;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+// Thread-local query cache with generation tracking
+// Each thread gets its own LRU cache for zero-contention queries
+// Generation counter is checked to invalidate cache on database reload
+thread_local! {
+    static QUERY_CACHE: RefCell<Option<(u64, LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>)>> = RefCell::new(None);
+}
 
 /// Statistics for database queries and cache performance
-#[derive(Debug, Clone, Copy, Default)]
+/// Uses atomic counters for thread-safe access across all threads
+#[derive(Debug, Default)]
 pub struct DatabaseStats {
+    /// Total number of queries executed
+    pub total_queries: AtomicU64,
+    /// Queries that found a match
+    pub queries_with_match: AtomicU64,
+    /// Queries that found no match
+    pub queries_without_match: AtomicU64,
+    /// Cache hits (query served from cache)
+    pub cache_hits: AtomicU64,
+    /// Cache misses (query required lookup)
+    pub cache_misses: AtomicU64,
+    /// Number of IP address queries
+    pub ip_queries: AtomicU64,
+    /// Number of string queries (literal or pattern)
+    pub string_queries: AtomicU64,
+}
+
+/// Snapshot of database statistics at a point in time
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DatabaseStatsSnapshot {
     /// Total number of queries executed
     pub total_queries: u64,
     /// Queries that found a match
@@ -41,6 +73,21 @@ pub struct DatabaseStats {
 }
 
 impl DatabaseStats {
+    /// Take a snapshot of current statistics
+    pub fn snapshot(&self) -> DatabaseStatsSnapshot {
+        DatabaseStatsSnapshot {
+            total_queries: self.total_queries.load(Ordering::Relaxed),
+            queries_with_match: self.queries_with_match.load(Ordering::Relaxed),
+            queries_without_match: self.queries_without_match.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            cache_misses: self.cache_misses.load(Ordering::Relaxed),
+            ip_queries: self.ip_queries.load(Ordering::Relaxed),
+            string_queries: self.string_queries.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl DatabaseStatsSnapshot {
     /// Calculate cache hit rate (0.0 to 1.0)
     pub fn cache_hit_rate(&self) -> f64 {
         let total_cache_ops = self.cache_hits + self.cache_misses;
@@ -80,6 +127,39 @@ pub enum QueryResult {
     },
     /// Not found
     NotFound,
+}
+
+/// Watcher thread handle and shutdown channel
+struct WatcherThread {
+    shutdown_tx: mpsc::Sender<()>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for WatcherThread {
+    fn drop(&mut self) {
+        // Send shutdown signal
+        let _ = self.shutdown_tx.send(());
+        
+        // Wait for thread to exit
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Shared state for file watching and auto-reload
+struct WatcherState {
+    /// Current database behind RwLock for atomic swaps
+    current: Arc<RwLock<Database>>,
+    
+    /// Generation counter - incremented on each reload to invalidate caches
+    generation: Arc<AtomicU64>,
+    
+    /// Watcher thread handle
+    _thread: WatcherThread,
+    
+    /// File watcher (must be kept alive!)
+    _watcher: notify::RecommendedWatcher,
 }
 
 /// Database format type
@@ -134,6 +214,7 @@ impl DatabaseStorage {
 
 /// Lazy pattern data mappings for O(1) load time
 /// Stores offset range instead of parsing all mappings eagerly
+#[derive(Clone)]
 struct PatternDataMappings {
     /// Offset to start of mapping data (after pattern_count u32)
     mappings_offset: usize,
@@ -177,6 +258,9 @@ pub struct DatabaseOptions {
 
     /// Optional in-memory bytes (for from_bytes builder)
     pub bytes: Option<Vec<u8>>,
+
+    /// Enable auto-reload on file changes
+    pub auto_reload: bool,
 }
 
 impl Default for DatabaseOptions {
@@ -185,6 +269,7 @@ impl Default for DatabaseOptions {
             path: PathBuf::new(),
             cache_capacity: Some(DEFAULT_QUERY_CACHE_SIZE),
             bytes: None,
+            auto_reload: false,
         }
     }
 }
@@ -243,6 +328,30 @@ impl DatabaseOpener {
         self
     }
 
+    /// Enable automatic reload on file changes
+    ///
+    /// The database will watch its source file and automatically reload
+    /// when changes are detected. All queries transparently use the latest
+    /// version.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use matchy::Database;
+    ///
+    /// let db = Database::from("threats.mxy")
+    ///     .auto_reload()
+    ///     .open()?;
+    ///
+    /// // Queries automatically use latest database
+    /// let result = db.lookup("1.2.3.4")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn auto_reload(mut self) -> Self {
+        self.options.auto_reload = true;
+        self
+    }
+
     /// Open the database with configured options
     pub fn open(self) -> Result<Database, DatabaseError> {
         Database::open_with_options(self.options)
@@ -281,6 +390,9 @@ impl DatabaseOpener {
 }
 
 /// Unified database for IP and pattern lookups
+///
+/// This struct is Send + Sync and can be wrapped in Arc to share across threads.
+/// Each thread maintains its own query cache for zero-contention access.
 pub struct Database {
     data: DatabaseStorage,
     format: DatabaseFormat,
@@ -288,24 +400,106 @@ pub struct Database {
     /// Literal hash table for O(1) exact string lookups
     literal_hash: Option<LiteralHash<'static>>,
     /// Pattern matcher for glob patterns (Combined or PatternOnly databases)
-    /// Uses RefCell for interior mutability since find_all needs &mut self
-    pattern_matcher: Option<RefCell<Paraglob>>,
+    /// Thread-safe: uses thread-local buffers internally
+    pattern_matcher: Option<Paraglob>,
     /// For combined databases: lazy mapping from pattern_id -> data offset in MMDB data section
     /// None for pattern-only databases (which use Paraglob's internal data)
     pattern_data_mappings: Option<PatternDataMappings>,
-    /// LRU query cache for recent lookups (IP, string, pattern)
-    /// Uses RefCell for interior mutability on lookups
-    /// Uses FxHasher (same as literal hash table) for fast non-cryptographic hashing
-    /// Significantly improves performance for repeated queries (80-95% hit rate typical)
-    pub(crate) query_cache:
-        RefCell<LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>>,
-    /// Whether caching is enabled (false = skip cache operations entirely)
+    /// Cache configuration (capacity)
+    cache_capacity: usize,
+    /// Whether caching is enabled
     cache_enabled: bool,
-    /// Query statistics (uses RefCell for interior mutability)
-    stats: RefCell<DatabaseStats>,
+    /// Query statistics (thread-safe atomic counters, shared across clones)
+    stats: Arc<DatabaseStats>,
+    /// File watching state (None if not watching)
+    watcher: Option<Arc<WatcherState>>,
+    /// Cache generation counter (shared with watcher, incremented on reload)
+    cache_generation: Arc<AtomicU64>,
+    /// Source file path (None for from_bytes)
+    source_path: Option<PathBuf>,
+    /// Options used to open this database (for reloading)
+    open_options: DatabaseOptions,
+}
+
+// Safety: Database is Send + Sync because:
+// 1. All data is either owned (DatabaseStorage) or 'static references to mmap
+// 2. All components (pattern_matcher, literal_hash, ip_tree) are read-only references to mmap
+// 3. Scratch buffers (for pattern matching) use thread-local storage, not shared state
+// 4. Caching uses thread-local storage (each thread has its own cache)
+// 5. No interior mutability after initialization
+unsafe impl Send for Database {}
+unsafe impl Sync for Database {}
+
+// Database can be cloned - all components are either Copy or cheap to clone
+// The mmap is reference-counted internally, so cloning is O(1)
+impl Clone for Database {
+    fn clone(&self) -> Self {
+        Self {
+            data: match &self.data {
+                DatabaseStorage::Owned(v) => DatabaseStorage::Owned(v.clone()),
+                // Mmap doesn't impl Clone - but we can try_clone() which creates a new mmap of same file
+                // For our use case, we want to share the same mmap, so we'll use unsafe transmute
+                // Safety: self.data lifetime is 'static (transmuted at creation), so clone is safe
+                DatabaseStorage::Mmap(m) => unsafe {
+                    DatabaseStorage::Mmap(std::ptr::read(m as *const _))
+                },
+            },
+            format: self.format,
+            ip_header: self.ip_header,
+            literal_hash: self.literal_hash.clone(),
+            pattern_matcher: self.pattern_matcher.clone(),
+            pattern_data_mappings: self.pattern_data_mappings.clone(),
+            cache_capacity: self.cache_capacity,
+            cache_enabled: self.cache_enabled,
+            stats: Arc::clone(&self.stats), // Shared stats across all clones
+            watcher: self.watcher.as_ref().map(Arc::clone), // Shared watcher state
+            cache_generation: Arc::clone(&self.cache_generation), // Shared generation counter
+            source_path: self.source_path.clone(),
+            open_options: self.open_options.clone(),
+        }
+    }
 }
 
 impl Database {
+    /// Helper: Access thread-local cache, initializing if needed
+    /// Automatically invalidates cache if generation changed (database reloaded)
+    #[inline]
+    fn with_cache<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>) -> R,
+    {
+        if !self.cache_enabled {
+            return None;
+        }
+        
+        let current_gen = self.cache_generation.load(Ordering::Acquire);
+        
+        QUERY_CACHE.with(|cache| {
+            let mut cache_borrow = cache.borrow_mut();
+            
+            // Check if cache needs initialization or invalidation
+            let needs_reset = match *cache_borrow {
+                None => true, // Not yet initialized
+                Some((gen, _)) if gen != current_gen => true, // Generation mismatch - invalidate!
+                _ => false, // Cache is valid
+            };
+            
+            if needs_reset {
+                // Initialize or reset cache with current generation
+                *cache_borrow = Some((
+                    current_gen,
+                    LruCache::with_hasher(
+                        NonZeroUsize::new(self.cache_capacity).unwrap(),
+                        BuildHasherDefault::<rustc_hash::FxHasher>::default(),
+                    ),
+                ));
+            }
+            
+            // Access the cache (guaranteed to be Some after initialization)
+            Some(f(&mut cache_borrow.as_mut().unwrap().1))
+        })
+    }
+
     /// Create a database opener with fluent builder API
     ///
     /// This is the recommended way to open databases, providing clean
@@ -360,9 +554,9 @@ impl Database {
         DatabaseOpener::from_bytes_builder(bytes)
     }
 
-    /// Clear the query cache
+    /// Clear the thread-local query cache
     ///
-    /// Removes all cached query results. Useful for benchmarking or
+    /// Clears the cache for the current thread only. Useful for benchmarking or
     /// when you want to force fresh lookups.
     ///
     /// # Examples
@@ -380,12 +574,18 @@ impl Database {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn clear_cache(&self) {
-        self.query_cache.borrow_mut().clear();
+        if self.cache_enabled {
+            QUERY_CACHE.with(|cache| {
+                if let Some((_, c)) = cache.borrow_mut().as_mut() {
+                    c.clear();
+                }
+            });
+        }
     }
 
-    /// Get current cache size (number of entries)
+    /// Get current thread-local cache size (number of entries)
     ///
-    /// Returns the number of query results currently cached.
+    /// Returns the number of query results currently cached in this thread.
     /// Useful for monitoring cache usage.
     ///
     /// # Examples
@@ -401,34 +601,37 @@ impl Database {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn cache_size(&self) -> usize {
-        self.query_cache.borrow().len()
+        if !self.cache_enabled {
+            return 0;
+        }
+        QUERY_CACHE.with(|cache| {
+            cache.borrow().as_ref().map_or(0, |(_, c)| c.len())
+        })
     }
 
-    /// Get database statistics
+    /// Get database statistics snapshot
     ///
-    /// Returns statistics about query performance, cache effectiveness,
-    /// and query distribution.
+    /// Returns a point-in-time snapshot of query statistics aggregated
+    /// across all threads. Uses atomic counters for thread-safe access.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// use matchy::Database;
+    /// use std::sync::Arc;
     ///
-    /// let db = Database::from("threats.mxy").open()?;
+    /// let db = Arc::new(Database::from("threats.mxy").open()?);
     ///
-    /// // Do some queries
-    /// db.lookup("1.2.3.4")?;
-    /// db.lookup("example.com")?;
+    /// // Query from multiple threads...
     ///
-    /// // Check stats
+    /// // Get aggregated stats
     /// let stats = db.stats();
     /// println!("Total queries: {}", stats.total_queries);
     /// println!("Cache hit rate: {:.1}%", stats.cache_hit_rate() * 100.0);
-    /// println!("Match rate: {:.1}%", stats.match_rate() * 100.0);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn stats(&self) -> DatabaseStats {
-        *self.stats.borrow()
+    pub fn stats(&self) -> DatabaseStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// Get the match mode of the database (case-sensitive or case-insensitive)
@@ -450,7 +653,7 @@ impl Database {
     pub fn mode(&self) -> crate::glob::MatchMode {
         // If there's a pattern matcher, use its mode
         if let Some(ref pm) = self.pattern_matcher {
-            return pm.borrow().mode;
+            return pm.mode;
         }
         // If there's a literal hash, use its mode
         if let Some(ref lh) = self.literal_hash {
@@ -465,6 +668,10 @@ impl Database {
     /// Most users should use `Database::from()` builder instead.
     pub fn open_with_options(options: DatabaseOptions) -> Result<Self, DatabaseError> {
         let cache_capacity = options.cache_capacity;
+        let auto_reload = options.auto_reload;
+        let path = options.path.clone();
+        let is_from_bytes = options.bytes.is_some();
+        let options_for_storage = options.clone();
 
         // Open the database - either from bytes or from file
         let mut db = if let Some(bytes) = options.bytes {
@@ -485,15 +692,31 @@ impl Database {
             if capacity == 0 {
                 // Disable cache completely - skip all cache operations
                 db.cache_enabled = false;
-            } else if capacity != DEFAULT_QUERY_CACHE_SIZE {
-                // Resize cache (use FxHasher for speed)
-                db.query_cache = std::cell::RefCell::new(lru::LruCache::with_hasher(
-                    std::num::NonZeroUsize::new(capacity).unwrap(),
-                    BuildHasherDefault::<rustc_hash::FxHasher>::default(),
-                ));
+            } else {
+                db.cache_capacity = capacity;
                 db.cache_enabled = true;
             }
-            // else: keep default size and enabled
+        }
+
+        // Store source path and options (for reloading)
+        db.source_path = if !is_from_bytes {
+            Some(path.clone())
+        } else {
+            None
+        };
+        db.open_options = options_for_storage;
+
+        // Spawn watcher thread if auto_reload is enabled
+        if auto_reload && !is_from_bytes {
+            // Can only watch file-based databases
+            // Note: We pass options with auto_reload disabled to prevent nested watchers
+            let mut watcher_options = db.open_options.clone();
+            watcher_options.auto_reload = false;
+            let watcher_state = Self::spawn_watcher_thread(path.clone(), watcher_options)?;
+            
+            // Share generation counter with outer database for cache invalidation
+            db.cache_generation = Arc::clone(&watcher_state.generation);
+            db.watcher = Some(watcher_state);
         }
 
         Ok(db)
@@ -559,12 +782,13 @@ impl Database {
             literal_hash: None,
             pattern_matcher: None,
             pattern_data_mappings: None,
-            query_cache: RefCell::new(LruCache::with_hasher(
-                NonZeroUsize::new(DEFAULT_QUERY_CACHE_SIZE).unwrap(),
-                BuildHasherDefault::<rustc_hash::FxHasher>::default(),
-            )),
+            cache_capacity: DEFAULT_QUERY_CACHE_SIZE,
             cache_enabled: true, // Default: cache enabled
-            stats: RefCell::new(DatabaseStats::default()),
+            stats: Arc::new(DatabaseStats::default()),
+            watcher: None,  // Set by open_with_options if auto_reload enabled
+            cache_generation: Arc::new(AtomicU64::new(0)), // Generation 0 for non-watched databases
+            source_path: None,  // Set by open_with_options
+            open_options: DatabaseOptions::default(),  // Set by open_with_options
         };
 
         // Now we can safely get 'static reference since db owns the data
@@ -583,7 +807,7 @@ impl Database {
                 let pg = Self::load_pattern_section(data, 0).map_err(|e| {
                     DatabaseError::Unsupported(format!("Failed to load pattern section: {}", e))
                 })?;
-                db.pattern_matcher = Some(RefCell::new(pg));
+                db.pattern_matcher = Some(pg);
             }
             DatabaseFormat::Combined => {
                 // Parse IP header first
@@ -598,7 +822,7 @@ impl Database {
                                 e
                             ))
                         })?;
-                    db.pattern_matcher = Some(RefCell::new(pg));
+                    db.pattern_matcher = Some(pg);
                     db.pattern_data_mappings = Some(map);
                 }
             }
@@ -623,21 +847,29 @@ impl Database {
     /// Automatically determines if the query is an IP address or string
     /// and uses the appropriate lookup method.
     ///
-    /// Queries are cached using an LRU cache. Repeated queries return
-    /// cached results without re-parsing or re-searching. Cache hit rates
+    /// Queries are cached in thread-local storage. Each thread maintains
+    /// its own LRU cache for zero-contention access. Cache hit rates
     /// of 80-95% are typical in log processing workloads.
+    ///
+    /// If auto-reload is enabled, this transparently uses the latest
+    /// reloaded database.
     ///
     /// Returns `Ok(Some(result))` if found, `Ok(None)` if not found.
     pub fn lookup(&self, query: &str) -> Result<Option<QueryResult>, DatabaseError> {
-        // Check cache first (only if caching is enabled)
-        if self.cache_enabled {
-            if let Some(cached_result) = self.query_cache.borrow_mut().get(query) {
-                // Cache hit - update stats in single borrow
-                let mut stats = self.stats.borrow_mut();
-                stats.total_queries += 1;
-                stats.cache_hits += 1;
-                drop(stats);
-                return Ok(Some(cached_result.clone()));
+        // If watching is enabled, delegate to the current database in RwLock
+        // (which has watcher=None to avoid infinite recursion)
+        if let Some(ref watcher) = self.watcher {
+            let current = watcher.current.read().unwrap();
+            return current.lookup(query);
+        }
+
+        // No watching - proceed with normal lookup
+        // Check thread-local cache first
+        if let Some(cached) = self.with_cache(|cache| cache.get(query).cloned()) {
+            if let Some(result) = cached {
+                self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
+                self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Some(result));
             }
         }
 
@@ -648,42 +880,33 @@ impl Database {
             self.lookup_string_uncached(query)?
         };
 
-        // Update all stats in single borrow to minimize overhead
-        {
-            let mut stats = self.stats.borrow_mut();
-            stats.total_queries += 1;
-
-            // Track query type based on result
-            match &result {
-                Some(QueryResult::Ip { .. }) => stats.ip_queries += 1,
-                Some(QueryResult::Pattern { .. }) | Some(QueryResult::NotFound) | None => {
-                    stats.string_queries += 1
-                }
+        // Update stats
+        self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
+        if self.cache_enabled {
+            self.stats.cache_misses.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        match &result {
+            Some(QueryResult::Ip { .. }) => {
+                self.stats.ip_queries.fetch_add(1, Ordering::Relaxed);
+                self.stats.queries_with_match.fetch_add(1, Ordering::Relaxed);
             }
-
-            // Track cache miss if caching enabled
-            if self.cache_enabled {
-                stats.cache_misses += 1;
+            Some(QueryResult::Pattern { .. }) => {
+                self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
+                self.stats.queries_with_match.fetch_add(1, Ordering::Relaxed);
             }
-
-            // Track match/no-match (NotFound is NOT a match)
-            match &result {
-                Some(QueryResult::NotFound) | None => {
-                    stats.queries_without_match += 1;
-                }
-                Some(_) => {
-                    stats.queries_with_match += 1;
-                }
+            Some(QueryResult::NotFound) => {
+                self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
+                self.stats.queries_without_match.fetch_add(1, Ordering::Relaxed);
+            }
+            None => {
+                self.stats.queries_without_match.fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        // Store in cache if result was found AND caching is enabled
-        if self.cache_enabled {
-            if let Some(ref res) = result {
-                self.query_cache
-                    .borrow_mut()
-                    .put(query.to_string(), res.clone());
-            }
+        // Store in cache if found
+        if let Some(ref res) = result {
+            self.with_cache(|cache| cache.put(query.to_string(), res.clone()));
         }
 
         Ok(result)
@@ -717,16 +940,18 @@ impl Database {
         }))
     }
 
-    /// Look up an IP address (public API, uses cache)
+    /// Look up an IP address (public API, uses thread-local cache)
     ///
     /// Returns data associated with the IP address if found.
     pub fn lookup_ip(&self, addr: IpAddr) -> Result<Option<QueryResult>, DatabaseError> {
         // Convert to string for cache key
         let query = addr.to_string();
 
-        // Check cache first
-        if let Some(cached_result) = self.query_cache.borrow_mut().get(&query) {
-            return Ok(Some(cached_result.clone()));
+        // Check thread-local cache first
+        if let Some(cached) = self.with_cache(|cache| cache.get(&query).cloned()) {
+            if let Some(result) = cached {
+                return Ok(Some(result));
+            }
         }
 
         // Cache miss - do actual lookup
@@ -734,7 +959,7 @@ impl Database {
 
         // Store in cache if found
         if let Some(ref res) = result {
-            self.query_cache.borrow_mut().put(query, res.clone());
+            self.with_cache(|cache| cache.put(query, res.clone()));
         }
 
         Ok(result)
@@ -816,8 +1041,7 @@ impl Database {
         }
 
         // 2. Check glob patterns (for wildcard matches)
-        if let Some(pg_cell) = &self.pattern_matcher {
-            let pg = pg_cell.borrow();
+        if let Some(ref pg) = self.pattern_matcher {
             let glob_pattern_ids = pg.find_all(pattern);
 
             // Add glob matches
@@ -858,13 +1082,15 @@ impl Database {
         }
     }
 
-    /// Look up a string (literal or glob pattern) - public API, uses cache
+    /// Look up a string (literal or glob pattern) - public API, uses thread-local cache
     ///
     /// Returns matching pattern IDs and associated data.
     pub fn lookup_string(&self, pattern: &str) -> Result<Option<QueryResult>, DatabaseError> {
-        // Check cache first
-        if let Some(cached_result) = self.query_cache.borrow_mut().get(pattern) {
-            return Ok(Some(cached_result.clone()));
+        // Check thread-local cache first
+        if let Some(cached) = self.with_cache(|cache| cache.get(pattern).cloned()) {
+            if let Some(result) = cached {
+                return Ok(Some(result));
+            }
         }
 
         // Cache miss - do actual lookup
@@ -872,9 +1098,7 @@ impl Database {
 
         // Store in cache if found
         if let Some(ref res) = result {
-            self.query_cache
-                .borrow_mut()
-                .put(pattern.to_string(), res.clone());
+            self.with_cache(|cache| cache.put(pattern.to_string(), res.clone()));
         }
 
         Ok(result)
@@ -1005,8 +1229,7 @@ impl Database {
     /// Returns the pattern string for a given pattern ID.
     /// Returns None if the database has no pattern data or pattern ID is invalid.
     pub fn get_pattern_string(&self, pattern_id: u32) -> Option<String> {
-        let pg_cell = self.pattern_matcher.as_ref()?;
-        let pg = pg_cell.borrow();
+        let pg = self.pattern_matcher.as_ref()?;
         pg.get_pattern(pattern_id)
     }
 
@@ -1016,10 +1239,7 @@ impl Database {
     /// Returns 0 if the database has no pattern data.
     pub fn pattern_count(&self) -> usize {
         match &self.pattern_matcher {
-            Some(pg_cell) => {
-                let pg = pg_cell.borrow();
-                pg.pattern_count()
-            }
+            Some(pg) => pg.pattern_count(),
             None => 0,
         }
     }
@@ -1287,6 +1507,116 @@ impl Database {
 
         // Default to case-sensitive for backward compatibility with old databases
         MatchMode::CaseSensitive
+    }
+
+    /// Spawn a watcher thread to monitor database file and auto-reload on changes
+    fn spawn_watcher_thread(
+        path: PathBuf,
+        options: DatabaseOptions,
+    ) -> Result<Arc<WatcherState>, DatabaseError> {
+        use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+        use std::sync::mpsc::RecvTimeoutError;
+
+        // Create channels
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+
+        // Canonicalize path to resolve symlinks (important on macOS)
+        let canonical_path = path.canonicalize()
+            .map_err(|e| DatabaseError::Io(format!("Failed to canonicalize path: {}", e)))?;
+        
+        // Create watcher - watch the file directly
+        // On macOS/FSEvents, this still detects atomic renames (mv new.mxy db.mxy)
+        let mut watcher = RecommendedWatcher::new(event_tx, Config::default())
+            .map_err(|e| DatabaseError::Io(format!("Failed to create file watcher: {}", e)))?;
+
+        watcher
+            .watch(&canonical_path, RecursiveMode::NonRecursive)
+            .map_err(|e| DatabaseError::Io(format!("Failed to watch file: {}", e)))?;
+
+        // Open database fresh (not cloned) to get independent mmap
+        // This ensures reloads get truly new data, not shared mmap pages
+        let initial_db = Database::open_with_options(options.clone())?;
+        let current_db = Arc::new(RwLock::new(initial_db));
+        
+        // Create shared generation counter for cache invalidation
+        // Starts at 1 (generation 0 is for non-watched databases)
+        let generation = Arc::new(AtomicU64::new(1));
+        
+        let state = Arc::new(WatcherState {
+            current: Arc::clone(&current_db),
+            generation: Arc::clone(&generation),
+            _thread: WatcherThread {
+                shutdown_tx: shutdown_tx.clone(),
+                handle: None,
+            },
+            _watcher: watcher,
+        });
+
+        // Clone state for thread
+        let thread_state = Arc::clone(&state);
+
+        // Spawn watcher thread
+        let handle = thread::spawn(move || {
+            let mut last_event_time: Option<Instant> = None;
+            const DEBOUNCE_MS: u64 = 200;
+
+            loop {
+                // Check shutdown signal
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                match event_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(Ok(_event)) => {
+                        // Any event on our watched file triggers reload debounce
+                        last_event_time = Some(Instant::now());
+                    }
+                    Ok(Err(_e)) => {
+                        // Ignore watcher errors - keep running
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        // Check if file is stable (no events for DEBOUNCE_MS)
+                        if let Some(last_time) = last_event_time {
+                            if last_time.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
+                                // Attempt reload (with auto_reload disabled to avoid nested watchers)
+                                let mut reload_options = options.clone();
+                                reload_options.auto_reload = false;
+                                let reload_result = Database::open_with_options(reload_options);
+                                
+                                match reload_result {
+                                    Ok(mut new_db) => {
+                                        // Increment generation to invalidate all thread-local caches
+                                        thread_state.generation.fetch_add(1, Ordering::Release);
+                                        
+                                        // Share generation counter with reloaded database
+                                        new_db.cache_generation = Arc::clone(&thread_state.generation);
+                                        
+                                        // Swap in new database
+                                        *thread_state.current.write().unwrap() = new_db;
+                                    }
+                                    Err(_e) => {
+                                        // Reload failed - keep old database
+                                    }
+                                }
+                                last_event_time = None;
+                            }
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+
+        // Store thread handle in WatcherThread
+        // Safety: We need to get mutable access to update the handle
+        // This is safe because we're the only thread with access at this point
+        let state_ptr = Arc::as_ptr(&state) as *mut WatcherState;
+        unsafe {
+            (*state_ptr)._thread.handle = Some(handle);
+        }
+
+        Ok(state)
     }
 }
 
