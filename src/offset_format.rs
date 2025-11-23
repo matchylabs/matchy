@@ -12,7 +12,7 @@
 //! # Layout
 //!
 //! ```text
-//! [Header: ParaglobHeader (v3: 104 bytes)]
+//! [Header: ParaglobHeader (v5: 112 bytes)]
 //! [AC Nodes: ACNode array]
 //! [AC Edges: ACEdge arrays (variable, referenced by nodes)]
 //! [AC Pattern IDs: u32 arrays (variable, referenced by nodes)]
@@ -21,6 +21,7 @@
 //! [Meta-word mappings: MetaWordMapping array]
 //! [Pattern reference arrays: u32 arrays]
 //! [Single wildcards: SingleWildcard array]
+//! [Glob Segments: GlobSegmentIndex + segment data (v5+)]
 //! [Data section: optional (v2+)]
 //! [Data mappings: optional (v2+)]
 //! [AC Literal Mapping: optional (v3+)]
@@ -39,8 +40,11 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 /// Magic bytes identifying Paraglob binary format
 pub const MAGIC: &[u8; 8] = b"PARAGLOB";
 
-/// Current format version (v4: uses ACNodeHot for 50% memory reduction)
-pub const MATCHY_FORMAT_VERSION: u32 = 4;
+/// Current format version (v5: serialized glob segments for zero-copy loading)
+pub const MATCHY_FORMAT_VERSION: u32 = 5;
+
+/// Previous format version (v4: uses ACNodeHot for 50% memory reduction)
+pub const MATCHY_FORMAT_VERSION_V4: u32 = 4;
 
 /// Previous format version (v3: adds AC literal mapping for zero-copy loading)
 pub const MATCHY_FORMAT_VERSION_V3: u32 = 3;
@@ -51,7 +55,7 @@ pub const MATCHY_FORMAT_VERSION_V2: u32 = 2;
 /// Previous format version (v1: patterns only, no data)
 pub const MATCHY_FORMAT_VERSION_V1: u32 = 1;
 
-/// Main header for serialized Paraglob database (104 bytes, 4-byte aligned)
+/// Main header for serialized Paraglob database (112 bytes, 4-byte aligned)
 ///
 /// This header appears at the start of every serialized Paraglob file.
 /// All offsets are relative to the start of the buffer.
@@ -61,13 +65,14 @@ pub const MATCHY_FORMAT_VERSION_V1: u32 = 1;
 /// - v2 (96 bytes): Adds data section support for pattern-associated data
 /// - v3 (104 bytes): Adds AC literal mapping for O(1) zero-copy loading
 /// - v4 (104 bytes): Uses ACNodeHot (16-byte) instead of ACNode (32-byte) - BREAKING
+/// - v5 (112 bytes): Adds serialized glob segments for zero-copy loading
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct ParaglobHeader {
     /// Magic bytes: "PARAGLOB"
     pub magic: [u8; 8],
 
-    /// Format version (currently 4)
+    /// Format version (currently 5)
     pub version: u32,
 
     /// Match mode: 0=CaseSensitive, 1=CaseInsensitive
@@ -158,6 +163,14 @@ pub struct ParaglobHeader {
     /// Number of entries in AC literal mapping table
     /// 0 = v1/v2 file, requires reconstruct_literal_mapping()
     pub ac_literal_map_count: u32,
+
+    // ===== v5 ADDITIONS (8 bytes) =====
+    /// Offset to glob segment index (0 = no segments, use lazy parsing)
+    /// Points to array of GlobSegmentIndex structs (one per pattern)
+    pub glob_segments_offset: u32,
+
+    /// Total size of glob segment data (index + segment structures + string data)
+    pub glob_segments_size: u32,
 }
 
 /// State encoding type for AC automaton nodes
@@ -419,8 +432,80 @@ pub struct PatternDataMapping {
     pub data_size: u32,
 }
 
+/// Glob segment index entry (8 bytes, 4-byte aligned)
+///
+/// Points to the glob segment data for a specific pattern.
+/// One entry exists for each pattern in the database.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
+pub struct GlobSegmentIndex {
+    /// Offset to first GlobSegmentHeader for this pattern
+    /// Relative to start of buffer
+    pub first_segment_offset: u32,
+
+    /// Number of segments in this pattern
+    pub segment_count: u16,
+
+    /// Reserved for alignment
+    pub reserved: u16,
+}
+
+/// Glob segment header (12 bytes, 4-byte aligned)
+///
+/// Describes a single segment of a glob pattern (Literal, Star, Question, or CharClass).
+/// Followed immediately by segment-specific data (string bytes or CharClassItem array).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
+pub struct GlobSegmentHeader {
+    /// Segment type:
+    /// - 0: Literal(String)
+    /// - 1: Star
+    /// - 2: Question
+    /// - 3: CharClass
+    pub segment_type: u8,
+
+    /// Flags (for CharClass: bit 0 = negated)
+    pub flags: u8,
+
+    /// Reserved for alignment
+    pub reserved: u16,
+
+    /// Length of associated data in bytes
+    /// - Literal: string byte length
+    /// - Star/Question: 0
+    /// - CharClass: number of CharClassItem entries * 12
+    pub data_len: u32,
+
+    /// Offset to associated data (relative to start of buffer)
+    /// - Literal: offset to UTF-8 string bytes
+    /// - Star/Question: unused (0)
+    /// - CharClass: offset to CharClassItemEncoded array
+    pub data_offset: u32,
+}
+
+/// Encoded character class item (12 bytes, 4-byte aligned)
+///
+/// Represents either a single character or a character range in a glob character class.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
+pub struct CharClassItemEncoded {
+    /// Item type:
+    /// - 0: Char(char1)
+    /// - 1: Range(char1, char2)
+    pub item_type: u8,
+
+    /// Reserved for alignment
+    pub reserved: [u8; 3],
+
+    /// First character (or only character for Char variant)
+    pub char1: u32,
+
+    /// Second character (for Range variant only, 0 for Char)
+    pub char2: u32,
+}
+
 // Compile-time size assertions to ensure struct layout
-const _: () = assert!(mem::size_of::<ParaglobHeader>() == 104); // v3: 8-byte magic + 24 * u32 fields
+const _: () = assert!(mem::size_of::<ParaglobHeader>() == 112); // v5: 8-byte magic + 26 * u32 fields
 const _: () = assert!(mem::size_of::<ACNodeHot>() == 16); // Cache-optimized: 4 per cache line
 const _: () = assert!(mem::size_of::<ACNode>() == 32); // Legacy: 2 per cache line
 const _: () = assert!(mem::size_of::<ACEdge>() == 8);
@@ -430,6 +515,9 @@ const _: () = assert!(mem::size_of::<PatternEntry>() == 16);
 const _: () = assert!(mem::size_of::<MetaWordMapping>() == 12);
 const _: () = assert!(mem::size_of::<SingleWildcard>() == 8);
 const _: () = assert!(mem::size_of::<PatternDataMapping>() == 12);
+const _: () = assert!(mem::size_of::<GlobSegmentIndex>() == 8);
+const _: () = assert!(mem::size_of::<GlobSegmentHeader>() == 12);
+const _: () = assert!(mem::size_of::<CharClassItemEncoded>() == 12);
 
 impl Default for ParaglobHeader {
     fn default() -> Self {
@@ -482,6 +570,9 @@ impl ParaglobHeader {
             // v3 fields
             ac_literal_map_offset: 0,
             ac_literal_map_count: 0,
+            // v5 fields
+            glob_segments_offset: 0,
+            glob_segments_size: 0,
         }
     }
 
@@ -491,7 +582,7 @@ impl ParaglobHeader {
             return Err("Invalid magic bytes");
         }
         if self.version != MATCHY_FORMAT_VERSION {
-            return Err("Unsupported version - only v4 format supported");
+            return Err("Unsupported version - only v5 format supported");
         }
         Ok(())
     }
@@ -575,6 +666,11 @@ impl ParaglobHeader {
     /// Check if data is inline (true) or external references (false)
     pub fn has_inline_data(&self) -> bool {
         (self.data_flags & 0x1) != 0
+    }
+
+    /// Check if this file has pre-built glob segments (v5+)
+    pub fn has_glob_segments(&self) -> bool {
+        self.glob_segments_size > 0 && self.glob_segments_offset > 0
     }
 
     /// Get the endianness marker from the header
@@ -768,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_header_size() {
-        assert_eq!(mem::size_of::<ParaglobHeader>(), 104); // v3: 8-byte magic + 24 * u32
+        assert_eq!(mem::size_of::<ParaglobHeader>(), 112); // v5: 8-byte magic + 26 * u32
         assert_eq!(mem::align_of::<ParaglobHeader>(), 4);
     }
 
@@ -841,7 +937,7 @@ mod tests {
 
     #[test]
     fn test_read_struct() {
-        let mut buffer = vec![0u8; 104]; // v3 header size
+        let mut buffer = vec![0u8; 112]; // v5 header size
         let header = ParaglobHeader::new();
 
         // Write header to buffer
@@ -854,7 +950,7 @@ mod tests {
         let read_header: ParaglobHeader = unsafe { read_struct(&buffer, 0) };
         assert_eq!(read_header.magic, *MAGIC);
         assert_eq!(read_header.version, MATCHY_FORMAT_VERSION);
-        assert_eq!(read_header.version, 4);
+        assert_eq!(read_header.version, 5);
     }
 
     #[test]

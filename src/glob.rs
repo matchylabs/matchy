@@ -120,6 +120,24 @@ impl GlobPattern {
         })
     }
 
+    /// Creates a glob pattern from pre-parsed segments (for deserialization).
+    ///
+    /// This is an internal constructor used when loading serialized patterns.
+    /// The segments are assumed to be valid.
+    ///
+    /// # Arguments
+    ///
+    /// * `pattern` - The original pattern string
+    /// * `segments` - Pre-parsed segments
+    /// * `mode` - Case-sensitive or case-insensitive matching
+    pub fn from_segments(pattern: String, segments: Vec<GlobSegment>, mode: MatchMode) -> Self {
+        Self {
+            pattern,
+            segments,
+            mode,
+        }
+    }
+
     /// Returns the original pattern string.
     pub fn pattern(&self) -> &str {
         &self.pattern

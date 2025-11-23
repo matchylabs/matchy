@@ -212,6 +212,7 @@ impl Default for ACLiteralHashBuilder {
 }
 
 /// Memory-mapped AC literal hash table for lookups
+#[derive(Clone)]
 pub struct ACLiteralHash<'a> {
     buffer: &'a [u8],
     header: ACLiteralHashHeader,

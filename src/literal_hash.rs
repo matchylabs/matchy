@@ -369,6 +369,7 @@ impl Default for LiteralHashBuilder {
 }
 
 /// Memory-mapped literal hash table for lookups
+#[derive(Clone)]
 pub struct LiteralHash<'a> {
     buffer: &'a [u8],
     header: LiteralHashHeader,

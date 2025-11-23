@@ -18,14 +18,15 @@
 use crate::ac_offset::{ACAutomaton, MatchMode as ACMatchMode};
 use crate::data_section::{DataEncoder, DataValue};
 use crate::error::ParaglobError;
-use crate::glob::{GlobPattern, MatchMode as GlobMatchMode};
+use crate::glob::{CharClassItem, GlobPattern, GlobSegment, MatchMode as GlobMatchMode};
 use crate::offset_format::{
-    read_cstring, read_str_checked, ACEdge, ParaglobHeader, PatternDataMapping, PatternEntry,
-    SingleWildcard,
+    read_cstring, ACEdge, GlobSegmentIndex, ParaglobHeader, PatternDataMapping,
+    PatternEntry, SingleWildcard,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::thread_local;
 use zerocopy::Ref;
 
 /// Pattern classification for optimization
@@ -375,14 +376,181 @@ impl ParaglobBuilder {
         Ok(Paraglob {
             buffer: BufferStorage::Owned(buffer),
             mode,
-            glob_cache: RefCell::new(HashMap::new()),
             ac_literal_hash,
             pattern_data_map,
-            candidate_buffer: RefCell::new(HashSet::new()),
-            ac_literal_buffer: RefCell::new(HashSet::new()),
-            result_buffer: RefCell::new(Vec::new()),
-            normalized_text_buffer: RefCell::new(Vec::new()),
         })
+    }
+
+    /// Serialize glob segments for a single pattern
+    fn serialize_glob_segments(
+        pattern_str: &str,
+        mode: GlobMatchMode,
+    ) -> Result<Vec<GlobSegment>, ParaglobError> {
+        // Use GlobPattern::new() which calls parse internally
+        let pattern = GlobPattern::new(pattern_str, mode)?;
+        Ok(pattern.segments().to_vec())
+    }
+
+    /// Build serialized glob segment data
+    /// Returns (segment_indices, segment_data, total_size, header_count)
+    fn build_glob_segment_section(
+        patterns: &[PatternType],
+        mode: ACMatchMode,
+    ) -> Result<(Vec<GlobSegmentIndex>, Vec<u8>, usize, usize), ParaglobError> {
+        use crate::offset_format::{CharClassItemEncoded, GlobSegmentHeader, GlobSegmentIndex};
+
+        let glob_mode = match mode {
+            ACMatchMode::CaseSensitive => GlobMatchMode::CaseSensitive,
+            ACMatchMode::CaseInsensitive => GlobMatchMode::CaseInsensitive,
+        };
+
+        let mut indices = Vec::with_capacity(patterns.len());
+        let mut segment_headers = Vec::new();
+        let mut string_data = Vec::new();
+        let mut char_class_data = Vec::new();
+
+        // Process each pattern
+        for pat in patterns {
+            let pattern_str = pat.pattern();
+            let segments = Self::serialize_glob_segments(pattern_str, glob_mode)?;
+
+            let first_segment_offset_placeholder = segment_headers.len();
+            let segment_count = segments.len() as u16;
+
+            // Process each segment
+            for segment in segments {
+                match segment {
+                    GlobSegment::Literal(s) => {
+                        let data_offset = string_data.len();
+                        string_data.extend_from_slice(s.as_bytes());
+
+                        segment_headers.push(GlobSegmentHeader {
+                            segment_type: 0,
+                            flags: 0,
+                            reserved: 0,
+                            data_len: s.len() as u32,
+                            data_offset: data_offset as u32, // Will be adjusted later
+                        });
+                    }
+                    GlobSegment::Star => {
+                        segment_headers.push(GlobSegmentHeader {
+                            segment_type: 1,
+                            flags: 0,
+                            reserved: 0,
+                            data_len: 0,
+                            data_offset: 0,
+                        });
+                    }
+                    GlobSegment::Question => {
+                        segment_headers.push(GlobSegmentHeader {
+                            segment_type: 2,
+                            flags: 0,
+                            reserved: 0,
+                            data_len: 0,
+                            data_offset: 0,
+                        });
+                    }
+                    GlobSegment::CharClass { chars, negated } => {
+                        let data_offset = char_class_data.len();
+                        let char_count = chars.len();
+
+                        for item in chars {
+                            let encoded = match item {
+                                CharClassItem::Char(c) => CharClassItemEncoded {
+                                    item_type: 0,
+                                    reserved: [0; 3],
+                                    char1: c as u32,
+                                    char2: 0,
+                                },
+                                CharClassItem::Range(start, end) => CharClassItemEncoded {
+                                    item_type: 1,
+                                    reserved: [0; 3],
+                                    char1: start as u32,
+                                    char2: end as u32,
+                                },
+                            };
+                            // Serialize to bytes
+                            char_class_data.push(encoded.item_type);
+                            char_class_data.extend_from_slice(&encoded.reserved);
+                            char_class_data.extend_from_slice(&encoded.char1.to_le_bytes());
+                            char_class_data.extend_from_slice(&encoded.char2.to_le_bytes());
+                        }
+
+                        segment_headers.push(GlobSegmentHeader {
+                            segment_type: 3,
+                            flags: if negated { 1 } else { 0 },
+                            reserved: 0,
+                            data_len: (char_count * mem::size_of::<CharClassItemEncoded>()) as u32,
+                            data_offset: data_offset as u32, // Will be adjusted later
+                        });
+                    }
+                }
+            }
+
+            indices.push(GlobSegmentIndex {
+                first_segment_offset: first_segment_offset_placeholder as u32,
+                segment_count,
+                reserved: 0,
+            });
+        }
+
+        // Now build the final buffer with proper offsets
+        // Layout: [GlobSegmentIndex array] [GlobSegmentHeader array] [string data] [char class data]
+        let index_size = indices.len() * mem::size_of::<GlobSegmentIndex>();
+        let header_count = segment_headers.len(); // Save before consuming vector
+        let headers_size = segment_headers.len() * mem::size_of::<GlobSegmentHeader>();
+        let strings_size = string_data.len();
+        let char_classes_size = char_class_data.len();
+
+        let total_size = index_size + headers_size + strings_size + char_classes_size;
+
+        let headers_offset = index_size;
+        let strings_offset = headers_offset + headers_size;
+        let char_classes_offset = strings_offset + strings_size;
+
+        // Adjust offsets in segment headers
+        let mut segment_data = Vec::with_capacity(headers_size + strings_size + char_classes_size);
+
+        // Write segment headers with adjusted offsets
+        for header in segment_headers {
+            let adjusted_header = GlobSegmentHeader {
+                segment_type: header.segment_type,
+                flags: header.flags,
+                reserved: header.reserved,
+                data_len: header.data_len,
+                data_offset: if header.data_len > 0 {
+                    match header.segment_type {
+                        0 => strings_offset as u32 + header.data_offset, // Literal string
+                        3 => char_classes_offset as u32 + header.data_offset, // CharClass
+                        _ => 0,
+                    }
+                } else {
+                    0
+                },
+            };
+
+            // Serialize header to bytes
+            segment_data.push(adjusted_header.segment_type);
+            segment_data.push(adjusted_header.flags);
+            segment_data.extend_from_slice(&adjusted_header.reserved.to_le_bytes());
+            segment_data.extend_from_slice(&adjusted_header.data_len.to_le_bytes());
+            segment_data.extend_from_slice(&adjusted_header.data_offset.to_le_bytes());
+        }
+
+        // Append string data
+        segment_data.extend_from_slice(&string_data);
+
+        // Append char class data
+        segment_data.extend_from_slice(&char_class_data);
+
+        // Adjust first_segment_offset in indices
+        for index in indices.iter_mut() {
+            // Calculate actual offset: base + (segment index * sizeof(header))
+            let segment_idx = index.first_segment_offset as usize;
+            index.first_segment_offset = (headers_offset + segment_idx * mem::size_of::<GlobSegmentHeader>()) as u32;
+        }
+
+        Ok((indices, segment_data, total_size, header_count))
     }
 
     fn build_internal_v3(self) -> Result<Vec<u8>, ParaglobError> {
@@ -539,6 +707,19 @@ impl ParaglobBuilder {
         let ac_hash_bytes = ac_hash_builder.build()?;
         let ac_literal_map_size = ac_hash_bytes.len();
 
+        // Glob segments section (v5) - pre-serialize all glob patterns
+        let (glob_indices, glob_segment_data, _glob_segments_total_size, segment_header_count) =
+            Self::build_glob_segment_section(&self.patterns, self.mode)?;
+        
+        // Add padding after AC literal map to ensure glob segments are 8-byte aligned
+        let unaligned_glob_start = ac_literal_map_start + ac_literal_map_size;
+        let glob_alignment = 8; // GlobSegmentIndex requires 8-byte alignment
+        let glob_padding = (glob_alignment - (unaligned_glob_start % glob_alignment)) % glob_alignment;
+        
+        let glob_segments_start = unaligned_glob_start + glob_padding;
+        let glob_index_size = glob_indices.len() * mem::size_of::<crate::offset_format::GlobSegmentIndex>();
+        let glob_segments_size = glob_index_size + glob_segment_data.len();
+
         // Allocate buffer (including padding for alignment)
         let total_size = header_size
             + ac_size
@@ -550,7 +731,9 @@ impl ParaglobBuilder {
             + data_section_size
             + data_padding  // Alignment padding before mapping table
             + mappings_size
-            + ac_literal_map_size;
+            + ac_literal_map_size
+            + glob_padding  // Alignment padding before glob segments
+            + glob_segments_size;
         let mut buffer = vec![0u8; total_size];
 
         // Write header (v2 if we have data, v1 otherwise)
@@ -582,6 +765,10 @@ impl ParaglobBuilder {
         // v3 fields (AC literal mapping - always present)
         header.ac_literal_map_offset = ac_literal_map_start as u32;
         header.ac_literal_map_count = ac_literal_to_patterns.len() as u32;
+
+        // v5 fields (glob segments - always present)
+        header.glob_segments_offset = glob_segments_start as u32;
+        header.glob_segments_size = glob_segments_size as u32;
 
         unsafe {
             let ptr = buffer.as_mut_ptr() as *mut ParaglobHeader;
@@ -656,11 +843,61 @@ impl ParaglobBuilder {
                 .copy_from_slice(&ac_hash_bytes);
         }
 
+        // Write glob segments section (v5)
+        // First write the GlobSegmentIndex array
+        let glob_index_end = glob_segments_start + glob_index_size;
+        for (i, index) in glob_indices.iter().enumerate() {
+            let index_offset = glob_segments_start + i * mem::size_of::<crate::offset_format::GlobSegmentIndex>();
+            // Adjust offsets to be relative to buffer start
+            let adjusted_index = crate::offset_format::GlobSegmentIndex {
+                first_segment_offset: (glob_segments_start as u32) + index.first_segment_offset,
+                segment_count: index.segment_count,
+                reserved: index.reserved,
+            };
+            unsafe {
+                let ptr = buffer.as_mut_ptr().add(index_offset) as *mut crate::offset_format::GlobSegmentIndex;
+                ptr.write(adjusted_index);
+            }
+        }
+        
+        // Then write the segment data (headers + strings + char classes)
+        // Note: We need to adjust data_offset fields in segment headers to be relative to buffer start
+        let mut adjusted_segment_data = glob_segment_data.clone();
+        
+        // Iterate through segment headers and adjust their data_offset fields
+        for i in 0..segment_header_count {
+            let header_offset_in_data = i * mem::size_of::<crate::offset_format::GlobSegmentHeader>();
+            if header_offset_in_data + mem::size_of::<crate::offset_format::GlobSegmentHeader>() <= adjusted_segment_data.len() {
+                // Read header
+                let header_slice = &adjusted_segment_data[header_offset_in_data..];
+                if let Ok((header_ref, _)) = zerocopy::Ref::<_, crate::offset_format::GlobSegmentHeader>::from_prefix(header_slice) {
+                    let mut header = *header_ref;
+                    
+                    // Adjust data_offset to be relative to buffer start
+                    // Note: offsets in segment_data include index_size, but indices are written
+                    // separately, so we need to subtract index_size then add glob_index_end
+                    if header.data_len > 0 && header.data_offset > 0 {
+                        header.data_offset = header.data_offset - glob_index_size as u32 + glob_index_end as u32;
+                    }
+                    
+                    // Write adjusted header back
+                    unsafe {
+                        let ptr = adjusted_segment_data.as_mut_ptr().add(header_offset_in_data) as *mut crate::offset_format::GlobSegmentHeader;
+                        ptr.write(header);
+                    }
+                }
+            }
+        }
+        
+        buffer[glob_index_end..glob_index_end + adjusted_segment_data.len()]
+            .copy_from_slice(&adjusted_segment_data);
+
         Ok(buffer)
     }
 }
 
 /// Buffer storage strategy
+#[derive(Clone)]
 enum BufferStorage {
     /// Owned buffer (built from patterns)
     Owned(Vec<u8>),
@@ -678,9 +915,19 @@ impl BufferStorage {
 }
 
 /// Pattern data mapping metadata for O(1) loading
+#[derive(Clone, Copy)]
 struct PatternDataMetadata {
     offset: usize,
     count: u32,
+}
+
+// Thread-local scratch buffers for zero-allocation queries
+// These are reused across queries within each thread
+thread_local! {
+    static CANDIDATE_BUFFER: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    static AC_LITERAL_BUFFER: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
+    static RESULT_BUFFER: RefCell<Vec<u32>> = RefCell::new(Vec::new());
+    static NORMALIZED_TEXT_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
 }
 
 /// Offset-based Paraglob pattern matcher
@@ -700,23 +947,32 @@ pub struct Paraglob {
     buffer: BufferStorage,
     /// Matching mode (public for Database::mode() access)
     pub(crate) mode: GlobMatchMode,
-    /// Compiled glob patterns (cached on first use)
-    /// Uses RefCell for interior mutability - allows &self methods while caching patterns
-    glob_cache: RefCell<HashMap<u32, GlobPattern>>,
     /// Memory-mapped hash table for AC literal ID to pattern IDs mapping (O(1) lookup)
     ac_literal_hash: Option<crate::ac_literal_hash::ACLiteralHash<'static>>,
     /// Pattern ID to data mapping (lazy-loaded from buffer)
     pattern_data_map: Option<PatternDataMetadata>,
-    /// Reusable buffer for candidate patterns (avoids allocation on every query)
-    /// Uses RefCell for interior mutability - allows &self methods while mutating buffers
-    candidate_buffer: RefCell<HashSet<u32>>,
-    /// Reusable buffer for AC literal IDs (avoids allocation on every query)
-    /// Uses RefCell for interior mutability - allows &self methods while mutating buffers
-    ac_literal_buffer: RefCell<HashSet<u32>>,
-    /// Reusable buffer for final match results (avoids allocation on every query)
-    result_buffer: RefCell<Vec<u32>>,
-    /// Reusable buffer for normalized text (case-insensitive matching)
-    normalized_text_buffer: RefCell<Vec<u8>>,
+}
+
+// SAFETY: Paraglob is Send + Sync because:
+// - buffer: Both Owned(Vec<u8>) and Borrowed(&'static [u8]) are Send + Sync
+// - mode: GlobMatchMode is Copy, thus Send + Sync
+// - ac_literal_hash: Contains only offsets and immutable references, Send + Sync
+// - pattern_data_map: Contains only offsets, Send + Sync
+// - All scratch buffers moved to thread-local storage
+unsafe impl Send for Paraglob {}
+unsafe impl Sync for Paraglob {}
+
+// Paraglob can be cloned - all fields are cheap to clone
+// The mmap'd buffer is just a reference, so cloning is O(1)
+impl Clone for Paraglob {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+            mode: self.mode,
+            ac_literal_hash: self.ac_literal_hash.clone(),
+            pattern_data_map: self.pattern_data_map,
+        }
+    }
 }
 
 impl Paraglob {
@@ -730,13 +986,8 @@ impl Paraglob {
         Self {
             buffer: BufferStorage::Owned(Vec::new()),
             mode,
-            glob_cache: RefCell::new(HashMap::new()),
             ac_literal_hash: None,
             pattern_data_map: None,
-            candidate_buffer: RefCell::new(HashSet::new()),
-            ac_literal_buffer: RefCell::new(HashSet::new()),
-            result_buffer: RefCell::new(Vec::new()),
-            normalized_text_buffer: RefCell::new(Vec::new()),
         }
     }
 
@@ -879,13 +1130,15 @@ impl Paraglob {
         }
 
         let ac_buffer = &buffer[ac_start..ac_start + ac_size];
-        Self::run_ac_matching_with_positions_with_buffer(
-            ac_buffer,
-            text,
-            self.mode,
-            output,
-            &self.normalized_text_buffer,
-        );
+        NORMALIZED_TEXT_BUFFER.with(|buf| {
+            Self::run_ac_matching_with_positions_with_buffer(
+                ac_buffer,
+                text,
+                self.mode,
+                output,
+                &buf,
+            );
+        });
     }
 
     /// Find all matching pattern IDs
@@ -908,9 +1161,9 @@ impl Paraglob {
         let ac_start = header.ac_nodes_offset as usize;
         let ac_size = header.ac_edges_size as usize;
 
-        // Reuse buffers (clear from previous query)
-        self.candidate_buffer.borrow_mut().clear();
-        self.ac_literal_buffer.borrow_mut().clear();
+        // Reuse thread-local buffers (clear from previous query)
+        CANDIDATE_BUFFER.with(|buf| buf.borrow_mut().clear());
+        AC_LITERAL_BUFFER.with(|buf| buf.borrow_mut().clear());
 
         if ac_size > 0 {
             // Extract AC buffer and run AC matching on it
@@ -919,27 +1172,33 @@ impl Paraglob {
             // Run AC automaton matching directly on text bytes (AC handles case-insensitivity)
             let text_bytes = text.as_bytes();
             let mode = self.mode;
-            Self::run_ac_matching_into_static(
-                ac_buffer,
-                text_bytes,
-                mode,
-                &mut self.ac_literal_buffer.borrow_mut(),
-            );
+            AC_LITERAL_BUFFER.with(|buf| {
+                Self::run_ac_matching_into_static(
+                    ac_buffer,
+                    text_bytes,
+                    mode,
+                    &mut buf.borrow_mut(),
+                );
+            });
 
             // Map AC literal IDs to pattern IDs using hash table lookup (O(1))
-            if !self.ac_literal_buffer.borrow().is_empty() {
-                if let Some(ref ac_hash) = self.ac_literal_hash {
-                    for &literal_id in self.ac_literal_buffer.borrow().iter() {
-                        let pattern_ids = ac_hash.lookup_slice(literal_id);
-                        self.candidate_buffer.borrow_mut().extend(pattern_ids);
+            AC_LITERAL_BUFFER.with(|ac_buf| {
+                if !ac_buf.borrow().is_empty() {
+                    if let Some(ref ac_hash) = self.ac_literal_hash {
+                        CANDIDATE_BUFFER.with(|cand_buf| {
+                            for &literal_id in ac_buf.borrow().iter() {
+                                let pattern_ids = ac_hash.lookup_slice(literal_id);
+                                cand_buf.borrow_mut().extend(pattern_ids);
+                            }
+                        });
                     }
                 }
-            }
+            });
         }
 
         // Phase 2: Verify candidates (or all patterns if no AC)
         // Reuse result buffer to avoid allocation
-        self.result_buffer.borrow_mut().clear();
+        RESULT_BUFFER.with(|buf| buf.borrow_mut().clear());
 
         // CRITICAL: Always check pure wildcards first (patterns with no literals)
         // These must be checked on every query regardless of AC results
@@ -976,42 +1235,24 @@ impl Paraglob {
                     Ok(r) => r,
                     Err(_) => continue, // Skip corrupted entry
                 };
-                let entry = *entry_ref;
+                let _entry = *entry_ref;
 
-                // Validate UTF-8 on every string read
-                let pattern_str = match unsafe {
-                    read_str_checked(
-                        buffer,
-                        entry.pattern_string_offset as usize,
-                        entry.pattern_string_length as usize,
-                    )
-                } {
-                    Ok(s) => s,
-                    Err(_) => continue, // Skip corrupted pattern
-                };
-
-                // Check glob pattern - ensure it's cached first
-                if !self.glob_cache.borrow().contains_key(&wildcard.pattern_id) {
-                    self.glob_cache.borrow_mut().insert(
-                        wildcard.pattern_id,
-                        GlobPattern::new(pattern_str, self.mode).expect("Invalid wildcard pattern"),
-                    );
-                }
-
-                if self
-                    .glob_cache
-                    .borrow()
-                    .get(&wildcard.pattern_id)
-                    .unwrap()
-                    .matches(text)
-                {
-                    self.result_buffer.borrow_mut().push(wildcard.pattern_id);
+                // Check glob pattern using zero-copy matcher
+                if let Ok(true) = Self::match_glob_from_buffer(
+                    buffer,
+                    wildcard.pattern_id,
+                    text,
+                    self.mode,
+                    header.glob_segments_offset as usize,
+                ) {
+                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(wildcard.pattern_id));
                 }
             }
         }
 
         // Check AC candidates (patterns that have literals that were found)
-        for &pattern_id in self.candidate_buffer.borrow().iter() {
+        CANDIDATE_BUFFER.with(|buf| {
+            for &pattern_id in buf.borrow().iter() {
             let patterns_offset = header.patterns_offset as usize;
             let entry_offset =
                 patterns_offset + (pattern_id as usize) * mem::size_of::<PatternEntry>();
@@ -1029,48 +1270,32 @@ impl Paraglob {
             if entry.pattern_type == 0 {
                 // Literal pattern - AC automaton already confirmed this matches!
                 // No need to read string or verify, just add to results.
-                self.result_buffer.borrow_mut().push(entry.pattern_id);
+                RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
             } else {
-                // Glob pattern - need to read pattern string and do glob matching
-                // Validate UTF-8 on every string read
-                let pattern_str = match unsafe {
-                    read_str_checked(
-                        buffer,
-                        entry.pattern_string_offset as usize,
-                        entry.pattern_string_length as usize,
-                    )
-                } {
-                    Ok(s) => s,
-                    Err(_) => continue, // Skip corrupted pattern
-                };
-
-                // Ensure pattern is cached first
-                if !self.glob_cache.borrow().contains_key(&entry.pattern_id) {
-                    self.glob_cache.borrow_mut().insert(
-                        entry.pattern_id,
-                        GlobPattern::new(pattern_str, self.mode)
-                            .expect("Invalid cached glob pattern"),
-                    );
-                }
-
-                if self
-                    .glob_cache
-                    .borrow()
-                    .get(&entry.pattern_id)
-                    .unwrap()
-                    .matches(text)
-                {
-                    self.result_buffer.borrow_mut().push(entry.pattern_id);
+                // Glob pattern - do glob matching
+                // Check glob pattern using zero-copy matcher
+                if let Ok(true) = Self::match_glob_from_buffer(
+                    buffer,
+                    entry.pattern_id,
+                    text,
+                    self.mode,
+                    header.glob_segments_offset as usize,
+                ) {
+                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
                 }
             }
-        }
+            }
+        });
 
-        self.result_buffer.borrow_mut().sort_unstable();
-        self.result_buffer.borrow_mut().dedup();
-        // Clone the result (caller owns it)
-        // Note: This still allocates once per query, but it's unavoidable
-        // without changing the API to return &[u32] or using arena allocation
-        self.result_buffer.borrow().clone()
+        RESULT_BUFFER.with(|buf| {
+            let mut result = buf.borrow_mut();
+            result.sort_unstable();
+            result.dedup();
+            // Clone the result (caller owns it)
+            // Note: This still allocates once per query, but it's unavoidable
+            // without changing the API to return &[u32] or using arena allocation
+            result.clone()
+        })
     }
 
     /// Find all matching pattern IDs (zero-allocation variant)
@@ -1106,9 +1331,9 @@ impl Paraglob {
         let ac_start = header.ac_nodes_offset as usize;
         let ac_size = header.ac_edges_size as usize;
 
-        // Reuse buffers (clear from previous query)
-        self.candidate_buffer.borrow_mut().clear();
-        self.ac_literal_buffer.borrow_mut().clear();
+        // Reuse thread-local buffers (clear from previous query)
+        CANDIDATE_BUFFER.with(|buf| buf.borrow_mut().clear());
+        AC_LITERAL_BUFFER.with(|buf| buf.borrow_mut().clear());
 
         if ac_size > 0 {
             // Extract AC buffer and run AC matching on it
@@ -1117,31 +1342,36 @@ impl Paraglob {
             // Run AC automaton matching directly on text bytes (AC handles case-insensitivity)
             let text_bytes = text.as_bytes();
             let mode = self.mode;
-            Self::run_ac_matching_into_static(
-                ac_buffer,
-                text_bytes,
-                mode,
-                &mut self.ac_literal_buffer.borrow_mut(),
-            );
+            AC_LITERAL_BUFFER.with(|buf| {
+                Self::run_ac_matching_into_static(
+                    ac_buffer,
+                    text_bytes,
+                    mode,
+                    &mut buf.borrow_mut(),
+                );
+            });
 
             // Map AC literal IDs to pattern IDs using hash table lookup (O(1))
             // Use zero-copy lookup_into to avoid allocations
-            if !self.ac_literal_buffer.borrow().is_empty() {
-                if let Some(ref ac_hash) = self.ac_literal_hash {
-                    // Collect literal IDs first to avoid multiple borrows
-                    let literal_ids: Vec<u32> =
-                        self.ac_literal_buffer.borrow().iter().copied().collect();
-                    let mut candidates = self.candidate_buffer.borrow_mut();
-                    for literal_id in literal_ids {
-                        ac_hash.lookup_into(literal_id, &mut *candidates);
+            AC_LITERAL_BUFFER.with(|ac_buf| {
+                if !ac_buf.borrow().is_empty() {
+                    if let Some(ref ac_hash) = self.ac_literal_hash {
+                        CANDIDATE_BUFFER.with(|cand_buf| {
+                            // Collect literal IDs first to avoid multiple borrows
+                            let literal_ids: Vec<u32> = ac_buf.borrow().iter().copied().collect();
+                            let mut candidates = cand_buf.borrow_mut();
+                            for literal_id in literal_ids {
+                                ac_hash.lookup_into(literal_id, &mut *candidates);
+                            }
+                        });
                     }
                 }
-            }
+            });
         }
 
         // Phase 2: Verify candidates (or all patterns if no AC)
         // Reuse result buffer to avoid allocation
-        self.result_buffer.borrow_mut().clear();
+        RESULT_BUFFER.with(|buf| buf.borrow_mut().clear());
 
         // CRITICAL: Always check pure wildcards first (patterns with no literals)
         // These must be checked on every query regardless of AC results
@@ -1178,42 +1408,24 @@ impl Paraglob {
                     Ok(r) => r,
                     Err(_) => continue, // Skip corrupted entry
                 };
-                let entry = *entry_ref;
+                let _entry = *entry_ref;
 
-                // Validate UTF-8 on every string read
-                let pattern_str = match unsafe {
-                    read_str_checked(
-                        buffer,
-                        entry.pattern_string_offset as usize,
-                        entry.pattern_string_length as usize,
-                    )
-                } {
-                    Ok(s) => s,
-                    Err(_) => continue, // Skip corrupted pattern
-                };
-
-                // Check glob pattern - ensure it's cached first
-                if !self.glob_cache.borrow().contains_key(&wildcard.pattern_id) {
-                    self.glob_cache.borrow_mut().insert(
-                        wildcard.pattern_id,
-                        GlobPattern::new(pattern_str, self.mode).expect("Invalid wildcard pattern"),
-                    );
-                }
-
-                if self
-                    .glob_cache
-                    .borrow()
-                    .get(&wildcard.pattern_id)
-                    .unwrap()
-                    .matches(text)
-                {
-                    self.result_buffer.borrow_mut().push(wildcard.pattern_id);
+                // Check glob pattern using zero-copy matcher
+                if let Ok(true) = Self::match_glob_from_buffer(
+                    buffer,
+                    wildcard.pattern_id,
+                    text,
+                    self.mode,
+                    header.glob_segments_offset as usize,
+                ) {
+                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(wildcard.pattern_id));
                 }
             }
         }
 
         // Check AC candidates (patterns that have literals that were found)
-        for &pattern_id in self.candidate_buffer.borrow().iter() {
+        CANDIDATE_BUFFER.with(|buf| {
+            for &pattern_id in buf.borrow().iter() {
             let patterns_offset = header.patterns_offset as usize;
             let entry_offset =
                 patterns_offset + (pattern_id as usize) * mem::size_of::<PatternEntry>();
@@ -1231,52 +1443,39 @@ impl Paraglob {
             if entry.pattern_type == 0 {
                 // Literal pattern - AC automaton already confirmed this matches!
                 // No need to read string or verify, just add to results.
-                self.result_buffer.borrow_mut().push(entry.pattern_id);
+                RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
             } else {
-                // Glob pattern - need to read pattern string and do glob matching
-                // Validate UTF-8 on every string read
-                let pattern_str = match unsafe {
-                    read_str_checked(
-                        buffer,
-                        entry.pattern_string_offset as usize,
-                        entry.pattern_string_length as usize,
-                    )
-                } {
-                    Ok(s) => s,
-                    Err(_) => continue, // Skip corrupted pattern
-                };
-
-                // Ensure pattern is cached first
-                if !self.glob_cache.borrow().contains_key(&entry.pattern_id) {
-                    self.glob_cache.borrow_mut().insert(
-                        entry.pattern_id,
-                        GlobPattern::new(pattern_str, self.mode)
-                            .expect("Invalid cached glob pattern"),
-                    );
-                }
-
-                if self
-                    .glob_cache
-                    .borrow()
-                    .get(&entry.pattern_id)
-                    .unwrap()
-                    .matches(text)
-                {
-                    self.result_buffer.borrow_mut().push(entry.pattern_id);
+                // Glob pattern - do glob matching
+                // Check glob pattern using zero-copy matcher
+                if let Ok(true) = Self::match_glob_from_buffer(
+                    buffer,
+                    entry.pattern_id,
+                    text,
+                    self.mode,
+                    header.glob_segments_offset as usize,
+                ) {
+                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
                 }
             }
-        }
+            }
+        });
 
-        self.result_buffer.borrow_mut().sort_unstable();
-        self.result_buffer.borrow_mut().dedup();
-        // Return slice (zero allocation!)
-        // SAFETY: This is safe because the function signature guarantees &mut self,
-        // so no other borrows can exist during this call
-        unsafe {
-            let ptr = self.result_buffer.as_ptr();
-            let borrowed = &*ptr;
-            std::slice::from_raw_parts(borrowed.as_ptr(), borrowed.len())
-        }
+        // Return slice from thread-local buffer (zero allocation!)
+        // SAFETY: This is safe because:
+        // - Thread-local storage is stable for the lifetime of the thread
+        // - Function signature guarantees &mut self, preventing concurrent calls on same thread
+        // - The slice remains valid until the next call to find_all* on this thread
+        RESULT_BUFFER.with(|buf| {
+            let mut result = buf.borrow_mut();
+            result.sort_unstable();
+            result.dedup();
+            
+            unsafe {
+                let ptr = result.as_ptr();
+                let len = result.len();
+                std::slice::from_raw_parts(ptr, len)
+            }
+        })
     }
 
     /// Find all matching pattern IDs and write into caller's buffer (zero-allocation variant)
@@ -1307,22 +1506,23 @@ impl Paraglob {
         output.extend_from_slice(results);
     }
 
-    /// Run AC automaton matching with position tracking (allocates normalized buffer)
+    /// Run AC automaton matching with position tracking (uses thread-local buffer)
     fn run_ac_matching_with_positions(
         ac_buffer: &[u8],
         text: &[u8],
         mode: GlobMatchMode,
         matches: &mut Vec<(usize, u32)>,
     ) {
-        // Stack-allocated buffer for one-off calls
-        let normalized_buf = RefCell::new(Vec::new());
-        Self::run_ac_matching_with_positions_with_buffer(
-            ac_buffer,
-            text,
-            mode,
-            matches,
-            &normalized_buf,
-        );
+        // Use thread-local buffer
+        NORMALIZED_TEXT_BUFFER.with(|buf| {
+            Self::run_ac_matching_with_positions_with_buffer(
+                ac_buffer,
+                text,
+                mode,
+                matches,
+                &buf,
+            );
+        });
     }
 
     /// Run AC automaton matching with position tracking (reusable buffer)
@@ -1639,17 +1839,281 @@ impl Paraglob {
         Ok(Self {
             buffer: BufferStorage::Owned(buffer),
             mode,
-            glob_cache: RefCell::new(HashMap::new()),
             ac_literal_hash,
             pattern_data_map,
-            candidate_buffer: RefCell::new(HashSet::new()),
-            ac_literal_buffer: RefCell::new(HashSet::new()),
-            result_buffer: RefCell::new(Vec::new()),
-            normalized_text_buffer: RefCell::new(Vec::new()),
         })
     }
 
-    /// Load from mmap'd slice (zero-copy)
+    /// Match text against serialized glob segments directly from buffer (zero-copy)
+    /// 
+    /// This function reads GlobSegmentHeader structs directly from the mmap'd buffer
+    /// and performs matching without allocating any heap structures.
+    fn match_glob_from_buffer(
+        buffer: &[u8],
+        pattern_id: u32,
+        text: &str,
+        mode: GlobMatchMode,
+        glob_segments_offset: usize,
+    ) -> Result<bool, ParaglobError> {
+        // Read GlobSegmentIndex for this pattern
+        let index_offset = glob_segments_offset + (pattern_id as usize) * mem::size_of::<GlobSegmentIndex>();
+        
+        if index_offset + mem::size_of::<GlobSegmentIndex>() > buffer.len() {
+            return Ok(false); // Invalid index, treat as no match
+        }
+
+        let index_slice = &buffer[index_offset..];
+        let (index_ref, _) = Ref::<_, GlobSegmentIndex>::from_prefix(index_slice)
+            .map_err(|_| ParaglobError::SerializationError("Invalid GlobSegmentIndex".to_string()))?;
+        let index = *index_ref;
+
+        // Match using segments directly from buffer
+        let mut steps_remaining = 100_000; // Backtracking limit like GlobPattern::matches
+        Self::match_segments_impl(
+            buffer,
+            text,
+            index.first_segment_offset as usize,
+            index.segment_count as usize,
+            0,  // text_pos
+            0,  // seg_idx
+            mode,
+            &mut steps_remaining,
+        )
+    }
+
+    /// Recursive matching implementation that works directly on serialized segments
+    #[allow(clippy::too_many_arguments)]
+    fn match_segments_impl(
+        buffer: &[u8],
+        text: &str,
+        first_segment_offset: usize,
+        segment_count: usize,
+        text_pos: usize,
+        seg_idx: usize,
+        mode: GlobMatchMode,
+        steps_remaining: &mut usize,
+    ) -> Result<bool, ParaglobError> {
+        use crate::offset_format::{CharClassItemEncoded, GlobSegmentHeader};
+
+        // Check step limit to prevent exponential backtracking
+        if *steps_remaining == 0 {
+            return Ok(false);
+        }
+        *steps_remaining -= 1;
+
+        // If we've consumed all segments, we match if we've also consumed all text
+        if seg_idx >= segment_count {
+            return Ok(text_pos >= text.len());
+        }
+
+        // Read the current segment header
+        let seg_offset = first_segment_offset + seg_idx * mem::size_of::<GlobSegmentHeader>();
+        if seg_offset + mem::size_of::<GlobSegmentHeader>() > buffer.len() {
+            return Ok(false);
+        }
+
+        let seg_slice = &buffer[seg_offset..];
+        let (seg_header_ref, _) = Ref::<_, GlobSegmentHeader>::from_prefix(seg_slice)
+            .map_err(|_| ParaglobError::SerializationError("Invalid GlobSegmentHeader".to_string()))?;
+        let seg_header = *seg_header_ref;
+
+        match seg_header.segment_type {
+            0 => {
+                // Literal - read string directly from buffer
+                let data_offset = seg_header.data_offset as usize;
+                let data_len = seg_header.data_len as usize;
+
+                if data_offset + data_len > buffer.len() {
+                    return Ok(false);
+                }
+
+                let lit_bytes = &buffer[data_offset..data_offset + data_len];
+                let lit = std::str::from_utf8(lit_bytes)
+                    .map_err(|_| ParaglobError::InvalidPattern("Invalid UTF-8 in literal".to_string()))?;
+
+                let remaining = &text[text_pos..];
+                let (matches, advance_bytes) = match mode {
+                    GlobMatchMode::CaseSensitive => (remaining.starts_with(lit), lit.len()),
+                    GlobMatchMode::CaseInsensitive => {
+                        let mut lit_chars = lit.chars();
+                        let mut matched_bytes = 0;
+                        let mut matches = true;
+
+                        for text_char in remaining.chars() {
+                            if let Some(lit_char) = lit_chars.next() {
+                                if !lit_char.eq_ignore_ascii_case(&text_char) {
+                                    matches = false;
+                                    break;
+                                }
+                                matched_bytes += text_char.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if matches && lit_chars.next().is_some() {
+                            matches = false;
+                        }
+
+                        (matches, matched_bytes)
+                    }
+                };
+
+                if matches {
+                    Self::match_segments_impl(
+                        buffer,
+                        text,
+                        first_segment_offset,
+                        segment_count,
+                        text_pos + advance_bytes,
+                        seg_idx + 1,
+                        mode,
+                        steps_remaining,
+                    )
+                } else {
+                    Ok(false)
+                }
+            }
+            1 => {
+                // Star - match zero or more characters
+                if seg_idx + 1 >= segment_count {
+                    return Ok(true); // Star at end matches everything
+                }
+
+                // Try matching star with 0, 1, 2, ... characters
+                let mut pos = text_pos;
+                loop {
+                    if Self::match_segments_impl(
+                        buffer,
+                        text,
+                        first_segment_offset,
+                        segment_count,
+                        pos,
+                        seg_idx + 1,
+                        mode,
+                        steps_remaining,
+                    )? {
+                        return Ok(true);
+                    }
+
+                    if pos >= text.len() {
+                        break;
+                    }
+                    if let Some(ch) = text[pos..].chars().next() {
+                        pos += ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                Ok(false)
+            }
+            2 => {
+                // Question - match exactly one character
+                if let Some(ch) = text[text_pos..].chars().next() {
+                    Self::match_segments_impl(
+                        buffer,
+                        text,
+                        first_segment_offset,
+                        segment_count,
+                        text_pos + ch.len_utf8(),
+                        seg_idx + 1,
+                        mode,
+                        steps_remaining,
+                    )
+                } else {
+                    Ok(false)
+                }
+            }
+            3 => {
+                // CharClass - read directly from buffer
+                let Some(ch) = text[text_pos..].chars().next() else {
+                    return Ok(false);
+                };
+
+                let ch_normalized = match mode {
+                    GlobMatchMode::CaseSensitive => ch,
+                    GlobMatchMode::CaseInsensitive => ch.to_ascii_lowercase(),
+                };
+
+                let data_offset = seg_header.data_offset as usize;
+                let data_len = seg_header.data_len as usize;
+                let item_size = mem::size_of::<CharClassItemEncoded>();
+                let item_count = data_len / item_size;
+
+                if data_offset + data_len > buffer.len() {
+                    return Ok(false);
+                }
+
+                let negated = seg_header.flags & 1 != 0;
+                let mut in_class = false;
+
+                for i in 0..item_count {
+                    let item_offset = data_offset + i * item_size;
+                    let item_slice = &buffer[item_offset..];
+                    let (item_ref, _) = Ref::<_, CharClassItemEncoded>::from_prefix(item_slice)
+                        .map_err(|_| ParaglobError::SerializationError("Invalid CharClassItemEncoded".to_string()))?;
+                    let item = *item_ref;
+
+                    let matches_item = match item.item_type {
+                        0 => {
+                            // Char
+                            if let Some(class_ch) = char::from_u32(item.char1) {
+                                let class_ch_normalized = match mode {
+                                    GlobMatchMode::CaseSensitive => class_ch,
+                                    GlobMatchMode::CaseInsensitive => class_ch.to_ascii_lowercase(),
+                                };
+                                ch_normalized == class_ch_normalized
+                            } else {
+                                false
+                            }
+                        }
+                        1 => {
+                            // Range
+                            if let (Some(start), Some(end)) = (char::from_u32(item.char1), char::from_u32(item.char2)) {
+                                let start_norm = match mode {
+                                    GlobMatchMode::CaseSensitive => start,
+                                    GlobMatchMode::CaseInsensitive => start.to_ascii_lowercase(),
+                                };
+                                let end_norm = match mode {
+                                    GlobMatchMode::CaseSensitive => end,
+                                    GlobMatchMode::CaseInsensitive => end.to_ascii_lowercase(),
+                                };
+                                ch_normalized >= start_norm && ch_normalized <= end_norm
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+
+                    if matches_item {
+                        in_class = true;
+                        break;
+                    }
+                }
+
+                let matches = if negated { !in_class } else { in_class };
+
+                if matches {
+                    Self::match_segments_impl(
+                        buffer,
+                        text,
+                        first_segment_offset,
+                        segment_count,
+                        text_pos + ch.len_utf8(),
+                        seg_idx + 1,
+                        mode,
+                        steps_remaining,
+                    )
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Ok(false), // Invalid segment type
+        }
+    }
+
+    /// Load from memory-mapped buffer (zero-copy)
     ///
     /// # Safety
     ///
@@ -1709,13 +2173,8 @@ impl Paraglob {
         Ok(Self {
             buffer: BufferStorage::Borrowed(slice),
             mode,
-            glob_cache: RefCell::new(HashMap::new()),
             ac_literal_hash,
             pattern_data_map,
-            candidate_buffer: RefCell::new(HashSet::new()),
-            ac_literal_buffer: RefCell::new(HashSet::new()),
-            result_buffer: RefCell::new(Vec::new()),
-            normalized_text_buffer: RefCell::new(Vec::new()),
         })
     }
 
