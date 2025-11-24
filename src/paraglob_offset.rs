@@ -182,30 +182,15 @@ impl PatternType {
     }
 }
 
-/// Database statistics
-#[derive(Debug, Clone)]
-pub struct Stats {
-    /// Number of patterns in the database
-    pub pattern_count: usize,
-    /// Number of AC automaton nodes
-    pub node_count: usize,
-    /// Number of AC automaton edges
-    pub edge_count: usize,
-    /// Size of data section in bytes (0 for v1)
-    pub data_section_size: usize,
-    /// Number of pattern-data mappings (0 for v1)
-    pub mapping_count: usize,
-}
-
 /// Incremental builder for constructing Paraglob pattern matchers
 ///
 /// This builder allows you to add patterns one at a time before
 /// building the final Paraglob instance.
 ///
 /// # Example
-/// ```
-/// use matchy::{ParaglobBuilder, data_section::DataValue};
-/// use matchy::glob::MatchMode;
+/// ```ignore
+/// use matchy::bench_api::ParaglobBuilder;
+/// use matchy::{data_section::DataValue, MatchMode};
 /// use std::collections::HashMap;
 ///
 /// let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
@@ -272,9 +257,9 @@ impl ParaglobBuilder {
     /// The assigned pattern ID
     ///
     /// # Example
-    /// ```
-    /// use matchy::{ParaglobBuilder, data_section::DataValue};
-    /// use matchy::glob::MatchMode;
+    /// ```ignore
+    /// use matchy::bench_api::ParaglobBuilder;
+    /// use matchy::{data_section::DataValue, MatchMode};
     /// use std::collections::HashMap;
     ///
     /// let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
@@ -309,16 +294,6 @@ impl ParaglobBuilder {
         self.pattern_set.insert(pattern.to_string());
         self.patterns.push(pat_type);
         Ok(id)
-    }
-
-    /// Get the number of patterns currently in the builder
-    pub fn pattern_count(&self) -> usize {
-        self.patterns.len()
-    }
-
-    /// Check if a pattern has already been added
-    pub fn contains_pattern(&self, pattern: &str) -> bool {
-        self.pattern_set.contains(pattern)
     }
 
     /// Build the final Paraglob matcher
@@ -994,6 +969,7 @@ impl Paraglob {
     }
 
     /// Build Paraglob from patterns
+    #[cfg(any(test, feature = "bench-internal"))]
     pub fn build_from_patterns(
         patterns: &[&str],
         mode: GlobMatchMode,
@@ -1009,9 +985,9 @@ impl Paraglob {
     /// * `mode` - Match mode (case sensitive/insensitive)
     ///
     /// # Example
-    /// ```
-    /// use matchy::{Paraglob, data_section::DataValue};
-    /// use matchy::glob::MatchMode;
+    /// ```ignore
+    /// use matchy::bench_api::Paraglob;
+    /// use matchy::{data_section::DataValue, MatchMode};
     /// use std::collections::HashMap;
     ///
     /// let patterns = vec!["*.evil.com", "malware.*"];
@@ -1029,6 +1005,7 @@ impl Paraglob {
     ///     MatchMode::CaseSensitive
     /// ).unwrap();
     /// ```
+    #[cfg(any(test, feature = "bench-internal"))]
     pub fn build_from_patterns_with_data(
         patterns: &[&str],
         data: Option<&[Option<DataValue>]>,
@@ -1042,101 +1019,6 @@ impl Paraglob {
         }
 
         builder.build()
-    }
-
-    /// Find all matches with their end positions in the text
-    ///
-    /// Returns (end_position, pattern_id) for each match.
-    /// The end_position is the byte offset immediately after the match.
-    pub fn find_matches_with_positions(&self, text: &str) -> Vec<(usize, u32)> {
-        self.find_matches_with_positions_bytes(text.as_bytes())
-    }
-
-    /// Find all matches with their end positions in raw bytes
-    ///
-    /// Returns (end_position, pattern_id) for each match.
-    /// The end_position is the byte offset immediately after the match.
-    ///
-    /// This method works directly on byte slices without requiring UTF-8 validation.
-    /// Useful for processing binary logs or avoiding whole-line UTF-8 validation overhead.
-    pub fn find_matches_with_positions_bytes(&self, text: &[u8]) -> Vec<(usize, u32)> {
-        let buffer = self.buffer.as_slice();
-        if buffer.is_empty() {
-            return Vec::new();
-        }
-
-        // SAFETY: Fast path - header is at offset 0, always aligned
-        let header = unsafe {
-            if buffer.len() < mem::size_of::<ParaglobHeader>() {
-                return Vec::new();
-            }
-            let ptr = buffer.as_ptr() as *const ParaglobHeader;
-            ptr.read()
-        };
-
-        let ac_start = header.ac_nodes_offset as usize;
-        let ac_size = header.ac_edges_size as usize;
-
-        if ac_size == 0 {
-            return Vec::new();
-        }
-
-        let ac_buffer = &buffer[ac_start..ac_start + ac_size];
-        let mut matches = Vec::new();
-        Self::run_ac_matching_with_positions(ac_buffer, text, self.mode, &mut matches);
-        matches
-    }
-
-    /// Find all matches with their end positions in raw bytes (zero-allocation variant)
-    ///
-    /// Writes (end_position, pattern_id) tuples into the provided buffer.
-    /// The buffer is cleared first. The end_position is the byte offset immediately after the match.
-    ///
-    /// This is a zero-allocation variant useful for hot paths where you process many lines
-    /// and want to reuse the same buffer.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let mut match_buffer = Vec::with_capacity(100);
-    /// for line in lines {
-    ///     tld_matcher.find_matches_with_positions_bytes_into(line, &mut match_buffer);
-    ///     // Process matches...
-    /// }
-    /// ```
-    pub fn find_matches_with_positions_bytes_into(
-        &self,
-        text: &[u8],
-        output: &mut Vec<(usize, u32)>,
-    ) {
-        output.clear();
-
-        let buffer = self.buffer.as_slice();
-        if buffer.is_empty() {
-            return;
-        }
-
-        // SAFETY: Fast path - header is at offset 0, always aligned
-        let header = unsafe {
-            if buffer.len() < mem::size_of::<ParaglobHeader>() {
-                return;
-            }
-            let ptr = buffer.as_ptr() as *const ParaglobHeader;
-            ptr.read()
-        };
-
-        let ac_start = header.ac_nodes_offset as usize;
-        let ac_size = header.ac_edges_size as usize;
-
-        if ac_size == 0 {
-            return;
-        }
-
-        let ac_buffer = &buffer[ac_start..ac_start + ac_size];
-        NORMALIZED_TEXT_BUFFER.with(|buf| {
-            Self::run_ac_matching_with_positions_with_buffer(
-                ac_buffer, text, self.mode, output, buf,
-            );
-        });
     }
 
     /// Find all matching pattern IDs
@@ -1294,310 +1176,6 @@ impl Paraglob {
             // without changing the API to return &[u32] or using arena allocation
             result.clone()
         })
-    }
-
-    /// Find all matching pattern IDs (zero-allocation variant)
-    ///
-    /// Returns a borrowed slice of pattern IDs. This does NOT allocate.
-    /// The slice is valid until the next call to any `find_all*` method.
-    ///
-    /// # Example
-    /// ```
-    /// use matchy::{Paraglob, glob::MatchMode};
-    ///
-    /// let patterns = vec!["*.txt", "test_*"];
-    /// let mut pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
-    ///
-    /// // Zero allocation!
-    /// let matches = pg.find_all_ref("test_file.txt");
-    /// assert_eq!(matches.len(), 2);
-    /// # Ok::<(), matchy::ParaglobError>(())
-    /// ```
-    pub fn find_all_ref(&mut self, text: &str) -> &[u32] {
-        let buffer = self.buffer.as_slice();
-        if buffer.is_empty() {
-            return &[];
-        }
-
-        let (header_ref, _) = match Ref::<_, ParaglobHeader>::from_prefix(buffer) {
-            Ok(r) => r,
-            Err(_) => return &[], // Invalid header, return empty
-        };
-        let header = *header_ref;
-
-        // Phase 1: Use AC automaton to find literal matches and candidate patterns
-        let ac_start = header.ac_nodes_offset as usize;
-        let ac_size = header.ac_edges_size as usize;
-
-        // Reuse thread-local buffers (clear from previous query)
-        CANDIDATE_BUFFER.with(|buf| buf.borrow_mut().clear());
-        AC_LITERAL_BUFFER.with(|buf| buf.borrow_mut().clear());
-
-        if ac_size > 0 {
-            // Extract AC buffer and run AC matching on it
-            let ac_buffer = &buffer[ac_start..ac_start + ac_size];
-
-            // Run AC automaton matching directly on text bytes (AC handles case-insensitivity)
-            let text_bytes = text.as_bytes();
-            let mode = self.mode;
-            AC_LITERAL_BUFFER.with(|buf| {
-                Self::run_ac_matching_into_static(
-                    ac_buffer,
-                    text_bytes,
-                    mode,
-                    &mut buf.borrow_mut(),
-                );
-            });
-
-            // Map AC literal IDs to pattern IDs using hash table lookup (O(1))
-            // Use zero-copy lookup_into to avoid allocations
-            AC_LITERAL_BUFFER.with(|ac_buf| {
-                if !ac_buf.borrow().is_empty() {
-                    if let Some(ref ac_hash) = self.ac_literal_hash {
-                        CANDIDATE_BUFFER.with(|cand_buf| {
-                            // Collect literal IDs first to avoid multiple borrows
-                            let literal_ids: Vec<u32> = ac_buf.borrow().iter().copied().collect();
-                            let mut candidates = cand_buf.borrow_mut();
-                            for literal_id in literal_ids {
-                                ac_hash.lookup_into(literal_id, &mut *candidates);
-                            }
-                        });
-                    }
-                }
-            });
-        }
-
-        // Phase 2: Verify candidates (or all patterns if no AC)
-        // Reuse result buffer to avoid allocation
-        RESULT_BUFFER.with(|buf| buf.borrow_mut().clear());
-
-        // CRITICAL: Always check pure wildcards first (patterns with no literals)
-        // These must be checked on every query regardless of AC results
-        // Wildcards are stored after pattern strings with 8-byte alignment padding
-        let unaligned_offset =
-            (header.pattern_strings_offset + header.pattern_strings_size) as usize;
-        let alignment = 8;
-        let padding = (alignment - (unaligned_offset % alignment)) % alignment;
-        let wildcards_offset = unaligned_offset + padding;
-        let wildcard_count = header.wildcard_count as usize;
-
-        if wildcard_count > 0 {
-            for i in 0..wildcard_count {
-                let wildcard_offset_val = wildcards_offset + i * mem::size_of::<SingleWildcard>();
-                let buffer_slice = match buffer.get(wildcard_offset_val..) {
-                    Some(s) => s,
-                    None => continue, // Skip corrupted wildcard
-                };
-                let (wildcard_ref, _) = match Ref::<_, SingleWildcard>::from_prefix(buffer_slice) {
-                    Ok(r) => r,
-                    Err(_) => continue, // Skip corrupted wildcard
-                };
-                let wildcard = *wildcard_ref;
-
-                // Look up PatternEntry to get the string length
-                let patterns_offset = header.patterns_offset as usize;
-                let entry_offset = patterns_offset
-                    + (wildcard.pattern_id as usize) * mem::size_of::<PatternEntry>();
-                let entry_slice = match buffer.get(entry_offset..) {
-                    Some(s) => s,
-                    None => continue, // Skip corrupted entry
-                };
-                let (entry_ref, _) = match Ref::<_, PatternEntry>::from_prefix(entry_slice) {
-                    Ok(r) => r,
-                    Err(_) => continue, // Skip corrupted entry
-                };
-                let _entry = *entry_ref;
-
-                // Check glob pattern using zero-copy matcher
-                if let Ok(true) = Self::match_glob_from_buffer(
-                    buffer,
-                    wildcard.pattern_id,
-                    text,
-                    self.mode,
-                    header.glob_segments_offset as usize,
-                ) {
-                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(wildcard.pattern_id));
-                }
-            }
-        }
-
-        // Check AC candidates (patterns that have literals that were found)
-        CANDIDATE_BUFFER.with(|buf| {
-            for &pattern_id in buf.borrow().iter() {
-                let patterns_offset = header.patterns_offset as usize;
-                let entry_offset =
-                    patterns_offset + (pattern_id as usize) * mem::size_of::<PatternEntry>();
-                let entry_slice = match buffer.get(entry_offset..) {
-                    Some(s) => s,
-                    None => continue, // Skip corrupted pattern
-                };
-                let entry_ref = match Ref::<_, PatternEntry>::from_prefix(entry_slice) {
-                    Ok((r, _)) => r,
-                    Err(_) => continue, // Skip corrupted pattern
-                };
-                let entry = *entry_ref;
-
-                // Check if pattern matches
-                if entry.pattern_type == 0 {
-                    // Literal pattern - AC automaton already confirmed this matches!
-                    // No need to read string or verify, just add to results.
-                    RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
-                } else {
-                    // Glob pattern - do glob matching
-                    // Check glob pattern using zero-copy matcher
-                    if let Ok(true) = Self::match_glob_from_buffer(
-                        buffer,
-                        entry.pattern_id,
-                        text,
-                        self.mode,
-                        header.glob_segments_offset as usize,
-                    ) {
-                        RESULT_BUFFER.with(|buf| buf.borrow_mut().push(entry.pattern_id));
-                    }
-                }
-            }
-        });
-
-        // Return slice from thread-local buffer (zero allocation!)
-        // SAFETY: This is safe because:
-        // - Thread-local storage is stable for the lifetime of the thread
-        // - Function signature guarantees &mut self, preventing concurrent calls on same thread
-        // - The slice remains valid until the next call to find_all* on this thread
-        RESULT_BUFFER.with(|buf| {
-            let mut result = buf.borrow_mut();
-            result.sort_unstable();
-            result.dedup();
-
-            unsafe {
-                let ptr = result.as_ptr();
-                let len = result.len();
-                std::slice::from_raw_parts(ptr, len)
-            }
-        })
-    }
-
-    /// Find all matching pattern IDs and write into caller's buffer (zero-allocation variant)
-    ///
-    /// Writes pattern IDs into the provided buffer. The buffer is cleared first.
-    /// This does NOT allocate (assuming buffer has sufficient capacity).
-    ///
-    /// # Example
-    /// ```
-    /// use matchy::{Paraglob, glob::MatchMode};
-    ///
-    /// let patterns = vec!["*.txt", "test_*"];
-    /// let mut pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
-    ///
-    /// // Reuse buffer across queries - zero allocation!
-    /// let mut results = Vec::with_capacity(100);
-    /// pg.find_all_into("test_file.txt", &mut results);
-    /// assert_eq!(results.len(), 2);
-    ///
-    /// // Reuse same buffer for next query
-    /// pg.find_all_into("another.txt", &mut results);
-    /// # Ok::<(), matchy::ParaglobError>(())
-    /// ```
-    pub fn find_all_into(&mut self, text: &str, output: &mut Vec<u32>) {
-        // Use find_all_ref to do the work, then copy to output
-        let results = self.find_all_ref(text);
-        output.clear();
-        output.extend_from_slice(results);
-    }
-
-    /// Run AC automaton matching with position tracking (uses thread-local buffer)
-    fn run_ac_matching_with_positions(
-        ac_buffer: &[u8],
-        text: &[u8],
-        mode: GlobMatchMode,
-        matches: &mut Vec<(usize, u32)>,
-    ) {
-        // Use thread-local buffer
-        NORMALIZED_TEXT_BUFFER.with(|buf| {
-            Self::run_ac_matching_with_positions_with_buffer(ac_buffer, text, mode, matches, buf);
-        });
-    }
-
-    /// Run AC automaton matching with position tracking (reusable buffer)
-    fn run_ac_matching_with_positions_with_buffer(
-        ac_buffer: &[u8],
-        text: &[u8],
-        mode: GlobMatchMode,
-        matches: &mut Vec<(usize, u32)>,
-        normalized_text_buffer: &RefCell<Vec<u8>>,
-    ) {
-        use crate::offset_format::ACNodeHot;
-
-        if ac_buffer.is_empty() || text.is_empty() {
-            return;
-        }
-
-        // Pre-lowercase text once for case-insensitive mode using SIMD (4-8x faster)
-        // Reuse buffer to avoid allocation
-        let search_text = match mode {
-            GlobMatchMode::CaseInsensitive => {
-                let mut buf = normalized_text_buffer.borrow_mut();
-                crate::simd_utils::ascii_lowercase(text, &mut buf);
-                // SAFETY: We copy the data out immediately and don't hold the borrow
-                // This is safe because search_text lifetime doesn't escape this function
-                unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) }
-            }
-            GlobMatchMode::CaseSensitive => text,
-        };
-
-        let mut current_offset = 0usize;
-
-        for (pos, &search_ch) in search_text.iter().enumerate() {
-            // Traverse to next state
-            loop {
-                if let Some(next_offset) =
-                    Self::find_ac_transition(ac_buffer, current_offset, search_ch)
-                {
-                    current_offset = next_offset;
-                    break;
-                }
-
-                if current_offset == 0 {
-                    break;
-                }
-
-                // Fast path: aligned pointer read for failure link
-                // SAFETY: ACNodeHot is 4-byte aligned (written at 16-byte intervals)
-                let node = unsafe {
-                    if current_offset + mem::size_of::<ACNodeHot>() > ac_buffer.len() {
-                        break;
-                    }
-                    let ptr = ac_buffer.as_ptr().add(current_offset) as *const ACNodeHot;
-                    ptr.read()
-                };
-                current_offset = node.failure_offset as usize;
-            }
-
-            // Collect matches at this position (end of match is pos + 1)
-            // SAFETY: Fast path with aligned pointer reads
-            let node = unsafe {
-                if current_offset + mem::size_of::<ACNodeHot>() > ac_buffer.len() {
-                    continue;
-                }
-                let ptr = ac_buffer.as_ptr().add(current_offset) as *const ACNodeHot;
-                ptr.read()
-            };
-
-            if node.pattern_count > 0 {
-                let patterns_offset = node.patterns_offset as usize;
-                let pattern_count = node.pattern_count as usize;
-
-                // SAFETY: Read u32 array directly (4-byte aligned)
-                unsafe {
-                    if patterns_offset + pattern_count * 4 <= ac_buffer.len() {
-                        let ids_ptr = ac_buffer.as_ptr().add(patterns_offset) as *const u32;
-                        for i in 0..pattern_count {
-                            let pattern_id = ids_ptr.add(i).read();
-                            matches.push((pos + 1, pattern_id));
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Run AC automaton matching on the offset-based buffer
@@ -1774,66 +1352,6 @@ impl Paraglob {
     /// Get the buffer (for serialization)
     pub fn buffer(&self) -> &[u8] {
         self.buffer.as_slice()
-    }
-
-    /// Load from buffer (for deserialization)
-    ///
-    /// Uses ACLiteralHash for O(1) AC literal lookups. Load time is O(1) since
-    /// the hash table is already serialized in the buffer.
-    ///
-    /// Validates UTF-8 on every pattern string read.
-    pub fn from_buffer(buffer: Vec<u8>, mode: GlobMatchMode) -> Result<Self, ParaglobError> {
-        if buffer.len() < mem::size_of::<ParaglobHeader>() {
-            return Err(ParaglobError::SerializationError(
-                "Buffer too small".to_string(),
-            ));
-        }
-
-        let (header_ref, _) = Ref::<_, ParaglobHeader>::from_prefix(buffer.as_slice())
-            .map_err(|_| ParaglobError::SerializationError("Invalid header".to_string()))?;
-        let header = *header_ref;
-        header
-            .validate()
-            .map_err(|e| ParaglobError::SerializationError(e.to_string()))?;
-
-        // Create AC literal hash table from the buffer
-        // This is O(1) - just validates header and stores slice reference
-        let ac_literal_hash = if header.has_ac_literal_mapping() {
-            let hash_offset = header.ac_literal_map_offset as usize;
-            if hash_offset >= buffer.len() {
-                return Err(ParaglobError::Validation(format!(
-                    "AC literal map offset {} out of bounds (buffer size: {})",
-                    hash_offset,
-                    buffer.len()
-                )));
-            }
-            let hash_slice = &buffer[hash_offset..];
-            // SAFETY: We're extending the lifetime to 'static, which is safe because
-            // the buffer is owned by this struct and won't be dropped
-            let static_slice: &'static [u8] =
-                unsafe { std::slice::from_raw_parts(hash_slice.as_ptr(), hash_slice.len()) };
-            Some(crate::ac_literal_hash::ACLiteralHash::from_buffer(
-                static_slice,
-            )?)
-        } else {
-            None
-        };
-
-        let pattern_data_map = if header.has_data_section() && header.mapping_count > 0 {
-            Some(PatternDataMetadata {
-                offset: header.mapping_table_offset as usize,
-                count: header.mapping_count,
-            })
-        } else {
-            None
-        };
-
-        Ok(Self {
-            buffer: BufferStorage::Owned(buffer),
-            mode,
-            ac_literal_hash,
-            pattern_data_map,
-        })
     }
 
     /// Match text against serialized glob segments directly from buffer (zero-copy)
@@ -2117,6 +1635,68 @@ impl Paraglob {
         }
     }
 
+    /// Load from buffer (for deserialization)
+    ///
+    /// Used internally by the `serialization` module's `from_bytes()` function.
+    /// Takes ownership of a Vec<u8> for owned buffer storage.
+    ///
+    /// Uses ACLiteralHash for O(1) AC literal lookups. Load time is O(1) since
+    /// the hash table is already serialized in the buffer.
+    #[cfg(any(test, feature = "bench-internal"))]
+    pub fn from_buffer(buffer: Vec<u8>, mode: GlobMatchMode) -> Result<Self, ParaglobError> {
+        if buffer.len() < mem::size_of::<ParaglobHeader>() {
+            return Err(ParaglobError::SerializationError(
+                "Buffer too small".to_string(),
+            ));
+        }
+
+        let (header_ref, _) = Ref::<_, ParaglobHeader>::from_prefix(buffer.as_slice())
+            .map_err(|_| ParaglobError::SerializationError("Invalid header".to_string()))?;
+        let header = *header_ref;
+        header
+            .validate()
+            .map_err(|e| ParaglobError::SerializationError(e.to_string()))?;
+
+        // Create AC literal hash table from the buffer
+        // This is O(1) - just validates header and stores slice reference
+        let ac_literal_hash = if header.has_ac_literal_mapping() {
+            let hash_offset = header.ac_literal_map_offset as usize;
+            if hash_offset >= buffer.len() {
+                return Err(ParaglobError::Validation(format!(
+                    "AC literal map offset {} out of bounds (buffer size: {})",
+                    hash_offset,
+                    buffer.len()
+                )));
+            }
+            let hash_slice = &buffer[hash_offset..];
+            // SAFETY: We're extending the lifetime to 'static, which is safe because
+            // the buffer is owned by this struct and won't be dropped
+            let static_slice: &'static [u8] =
+                unsafe { std::slice::from_raw_parts(hash_slice.as_ptr(), hash_slice.len()) };
+            Some(crate::ac_literal_hash::ACLiteralHash::from_buffer(
+                static_slice,
+            )?)
+        } else {
+            None
+        };
+
+        let pattern_data_map = if header.has_data_section() && header.mapping_count > 0 {
+            Some(PatternDataMetadata {
+                offset: header.mapping_table_offset as usize,
+                count: header.mapping_count,
+            })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            buffer: BufferStorage::Owned(buffer),
+            mode,
+            ac_literal_hash,
+            pattern_data_map,
+        })
+    }
+
     /// Load from memory-mapped buffer (zero-copy)
     ///
     /// # Safety
@@ -2261,6 +1841,7 @@ impl Paraglob {
     }
 
     /// Check if this Paraglob has data section support (v2 format)
+    #[cfg(any(test, feature = "bench-internal"))]
     pub fn has_data_section(&self) -> bool {
         let buffer = self.buffer.as_slice();
         if buffer.len() < mem::size_of::<ParaglobHeader>() {
@@ -2273,21 +1854,6 @@ impl Paraglob {
         };
         let header = *header_ref;
         header.has_data_section()
-    }
-
-    /// Get the version of the Paraglob format
-    pub fn version(&self) -> u32 {
-        let buffer = self.buffer.as_slice();
-        if buffer.len() < mem::size_of::<ParaglobHeader>() {
-            return 1;
-        }
-
-        let (header_ref, _) = match Ref::<_, ParaglobHeader>::from_prefix(buffer) {
-            Ok(r) => r,
-            Err(_) => return 1, // Default to v1
-        };
-        let header = *header_ref;
-        header.version
     }
 
     /// Get pattern string by ID
@@ -2311,43 +1877,6 @@ impl Paraglob {
 
         unsafe { read_cstring(buffer, entry.pattern_string_offset as usize).ok() }
             .map(|s| s.to_string())
-    }
-
-    /// Get database statistics
-    pub fn get_stats(&self) -> Stats {
-        let buffer = self.buffer.as_slice();
-        if buffer.len() < mem::size_of::<ParaglobHeader>() {
-            return Stats {
-                pattern_count: 0,
-                node_count: 0,
-                edge_count: 0,
-                data_section_size: 0,
-                mapping_count: 0,
-            };
-        }
-
-        let (header_ref, _) = match Ref::<_, ParaglobHeader>::from_prefix(buffer) {
-            Ok(r) => r,
-            Err(_) => {
-                // If header read fails, return default stats
-                return Stats {
-                    pattern_count: 0,
-                    node_count: 0,
-                    edge_count: 0,
-                    data_section_size: 0,
-                    mapping_count: 0,
-                };
-            }
-        };
-        let header = *header_ref;
-        Stats {
-            pattern_count: header.pattern_count as usize,
-            node_count: header.ac_node_count as usize,
-            // AC edges are embedded in nodes, count estimated from size
-            edge_count: (header.ac_edges_size as usize) / mem::size_of::<ACEdge>(),
-            data_section_size: header.data_section_size as usize,
-            mapping_count: header.mapping_count as usize,
-        }
     }
 }
 
@@ -2416,21 +1945,5 @@ mod tests {
 
         let matches = pg.find_all("goodbye world");
         assert!(matches.is_empty());
-    }
-
-    #[test]
-    fn test_serialization_roundtrip() {
-        let patterns = vec!["hello", "*.txt", "test_*"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
-
-        // Get buffer
-        let buffer = pg.buffer().to_vec();
-
-        // Restore from buffer
-        let pg2 = Paraglob::from_buffer(buffer, GlobMatchMode::CaseSensitive).unwrap();
-
-        // Should produce same results
-        let text = "hello test_file.txt";
-        assert_eq!(pg.find_all(text), pg2.find_all(text));
     }
 }

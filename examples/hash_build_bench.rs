@@ -3,8 +3,8 @@
 //! This example demonstrates the performance of parallel sharded hash table construction
 //! compared to a single-threaded build.
 
-use matchy::glob::MatchMode;
 use matchy::literal_hash::LiteralHashBuilder;
+use matchy::MatchMode;
 use std::time::Instant;
 
 fn main() {

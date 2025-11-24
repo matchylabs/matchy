@@ -46,11 +46,6 @@ namespace matchy {
 #define MATCHY_AC_LITERAL_HASH_VERSION 1
 
 /*
- Current version of the literal hash format
- */
-#define MATCHY_LITERAL_HASH_VERSION 1
-
-/*
  Current format version (v5: serialized glob segments for zero-copy loading)
  */
 #define MATCHY_FORMAT_VERSION 5
@@ -74,6 +69,11 @@ namespace matchy {
  Previous format version (v1: patterns only, no data)
  */
 #define MATCHY_FORMAT_VERSION_V1 1
+
+/*
+ Current version of the literal hash format
+ */
+#define MATCHY_LITERAL_HASH_VERSION 1
 
 /*
  Success code

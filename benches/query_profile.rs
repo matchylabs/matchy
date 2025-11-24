@@ -6,8 +6,8 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-use matchy::glob::MatchMode;
-use matchy::Paraglob;
+use matchy::bench_api::Paraglob;
+use matchy::MatchMode;
 use std::hint::black_box;
 
 fn main() {

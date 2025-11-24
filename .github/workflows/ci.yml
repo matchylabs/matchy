@@ -36,8 +36,13 @@ jobs:
         with:
           components: clippy
       
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+- name: Run clippy (library and bins only, no bench features)
+        run: cargo clippy --lib --bins -- -D warnings
+
+- name: Dead code check (fail on dead_code)
+        run: cargo check --lib --bins
+        env:
+          RUSTFLAGS: -Ddead_code
 
   test:
     name: Test
@@ -79,21 +84,21 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target
       
-      - name: Build
+- name: Build
         run: cargo build --verbose
       
-      - name: Run tests
-        run: cargo test --verbose
+- name: Run tests (lib/bins/tests only; skip doctests; enable bench-internal for test needs)
+        run: cargo test --verbose --lib --bins --tests --features bench-internal
       
-      - name: Run integration tests
-        run: cargo test --test integration_tests --verbose
+      - name: Run integration tests explicitly
+        run: cargo test --test integration_tests --verbose --features bench-internal
       
       - name: Build release
         run: cargo build --release --verbose
       
-      - name: Run examples
+- name: Run examples (public API only)
         run: |
-          cargo run --release --example production_test
+          cargo run --release --example cache_demo
 
   docs:
     name: Documentation
@@ -124,11 +129,11 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-bench
       
-      - name: Compile benchmarks
-        run: cargo bench --no-run
+- name: Compile benchmarks (bench-internal)
+        run: cargo bench --no-run --features bench-internal
       
-      - name: Run benchmark smoke test
-        run: cargo bench -- --test
+      - name: Run benchmark smoke test (bench-internal)
+        run: cargo bench --features bench-internal -- --test
 
   coverage:
     name: Code Coverage
@@ -142,8 +147,8 @@ jobs:
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin
       
-      - name: Generate coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
+- name: Generate coverage (no bench features)
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

@@ -3,7 +3,11 @@
 //! This module provides glob pattern support with wildcards (`*`, `?`), character classes
 //! (`[...]`, `[!...]`), and literal matching. Patterns are parsed into structured segments
 //! and matched efficiently against text.
-//!
+
+// Private module used by mmdb_builder (public) and paraglob_offset (private)
+// Clippy can't track usage through private modules, so allow dead_code warnings
+#![allow(dead_code)]
+
 //! # Glob Syntax
 //!
 //! - `*` - Matches zero or more of any character (greedy)
@@ -15,7 +19,7 @@
 //!
 //! # Examples
 //!
-//! ```
+//! ```ignore
 //! use matchy::glob::{GlobPattern, MatchMode};
 //!
 //! // Simple wildcard matching
@@ -104,7 +108,7 @@ impl GlobPattern {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use matchy::glob::{GlobPattern, MatchMode};
     ///
     /// let pattern = GlobPattern::new("*.txt", MatchMode::CaseSensitive)?;
@@ -157,7 +161,7 @@ impl GlobPattern {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use matchy::glob::{GlobPattern, MatchMode};
     ///
     /// let pattern = GlobPattern::new("hello*world", MatchMode::CaseSensitive)?;

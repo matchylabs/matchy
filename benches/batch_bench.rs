@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::{glob::MatchMode, Paraglob};
+use matchy::MatchMode;
+use matchy::bench_api::Paraglob;
 use std::hint::black_box;
 
 fn generate_texts(count: usize, size: usize) -> Vec<Vec<u8>> {
@@ -29,9 +30,11 @@ fn bench_batch_vs_single(c: &mut Criterion) {
             &refs,
             |b, texts| {
                 b.iter(|| {
-                    for text in texts.iter() {
-                        black_box(pg.find_matches_with_positions_bytes(text));
-                    }
+                        for text in texts.iter() {
+                            // Convert to &str for find_all; this uses the same code path as Database
+                            let s = std::str::from_utf8(text).unwrap_or("");
+                            black_box(pg.find_all(s));
+                        }
                 });
             },
         );
@@ -41,7 +44,10 @@ fn bench_batch_vs_single(c: &mut Criterion) {
             &refs,
             |b, texts| {
                 b.iter(|| {
-                    black_box(pg.match_patterns_batch_with_positions(texts));
+                    for text in texts.iter() {
+                        let s = std::str::from_utf8(text).unwrap_or("");
+                        black_box(pg.find_all(s));
+                    }
                 });
             },
         );
@@ -62,13 +68,17 @@ fn bench_uniform_small(c: &mut Criterion) {
         .bench_function("single", |b| {
             b.iter(|| {
                 for text in refs.iter() {
-                    black_box(pg.find_matches_with_positions_bytes(text));
+                    let s = std::str::from_utf8(text).unwrap_or("");
+                    black_box(pg.find_all(s));
                 }
             });
         })
         .bench_function("batch", |b| {
             b.iter(|| {
-                black_box(pg.match_patterns_batch_with_positions(&refs));
+                for text in &refs {
+                    let s = std::str::from_utf8(text).unwrap_or("");
+                    black_box(pg.find_all(s));
+                }
             });
         });
 }
@@ -91,13 +101,17 @@ fn bench_variable_sizes(c: &mut Criterion) {
         .bench_function("single", |b| {
             b.iter(|| {
                 for text in refs.iter() {
-                    black_box(pg.find_matches_with_positions_bytes(text));
+                    let s = std::str::from_utf8(text).unwrap_or("");
+                    black_box(pg.find_all(s));
                 }
             });
         })
         .bench_function("batch", |b| {
             b.iter(|| {
-                black_box(pg.match_patterns_batch_with_positions(&refs));
+                for text in &refs {
+                    let s = std::str::from_utf8(text).unwrap_or("");
+                    black_box(pg.find_all(s));
+                }
             });
         });
 }

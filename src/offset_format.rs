@@ -44,6 +44,7 @@ pub const MAGIC: &[u8; 8] = b"PARAGLOB";
 pub const MATCHY_FORMAT_VERSION: u32 = 5;
 
 /// Previous format version (v4: uses ACNodeHot for 50% memory reduction)
+#[allow(dead_code)]
 pub const MATCHY_FORMAT_VERSION_V4: u32 = 4;
 
 /// Previous format version (v3: adds AC literal mapping for zero-copy loading)
@@ -692,6 +693,7 @@ impl ParaglobHeader {
 
 impl ACNode {
     /// Create a new node with default EMPTY encoding
+    #[allow(dead_code)]
     pub fn new(node_id: u32, depth: u8) -> Self {
         Self {
             node_id,
@@ -744,6 +746,7 @@ impl PatternEntry {
 /// - offset + `size_of::<T>`() <= buffer.len()
 /// - Buffer is properly aligned for T
 /// - Bytes represent a valid T
+#[allow(dead_code)]
 pub unsafe fn read_struct<T: Copy>(buffer: &[u8], offset: usize) -> T {
     debug_assert!(offset + mem::size_of::<T>() <= buffer.len());
     let ptr = buffer.as_ptr().add(offset) as *const T;
@@ -757,6 +760,7 @@ pub unsafe fn read_struct<T: Copy>(buffer: &[u8], offset: usize) -> T {
 /// Caller must ensure:
 /// - offset + `size_of::<T>`() * count <= buffer.len()
 /// - Buffer contains valid T values
+#[allow(dead_code)]
 pub unsafe fn read_struct_slice<T: Copy>(buffer: &[u8], offset: usize, count: usize) -> &[T] {
     debug_assert!(offset + mem::size_of::<T>() * count <= buffer.len());
     let ptr = buffer.as_ptr().add(offset) as *const T;
@@ -803,6 +807,7 @@ pub unsafe fn read_cstring(buffer: &[u8], offset: usize) -> Result<&str, &'stati
 /// - Bytes are valid UTF-8
 /// - Length is correct
 #[inline]
+#[allow(dead_code)]
 pub unsafe fn read_cstring_with_len(
     buffer: &[u8],
     offset: usize,
@@ -828,6 +833,7 @@ pub unsafe fn read_cstring_with_len(
 /// - Bytes are DEFINITELY valid UTF-8 (undefined behavior if not!)
 /// - Length is correct
 #[inline]
+#[allow(dead_code)]
 pub unsafe fn read_str_unchecked(buffer: &[u8], offset: usize, length: usize) -> &str {
     debug_assert!(offset + length <= buffer.len());
     // SAFETY: Caller guarantees valid UTF-8
@@ -847,6 +853,7 @@ pub unsafe fn read_str_unchecked(buffer: &[u8], offset: usize, length: usize) ->
 ///
 /// UTF-8 validation is performed, so invalid UTF-8 returns an error.
 #[inline]
+#[allow(dead_code)]
 pub unsafe fn read_str_checked(
     buffer: &[u8],
     offset: usize,

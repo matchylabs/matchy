@@ -36,7 +36,7 @@
 //!
 //! ```rust,no_run
 //! use matchy::misp_importer::MispImporter;
-//! use matchy::glob::MatchMode;
+//! use matchy::MatchMode;
 //! use std::fs;
 //!
 //! // Load MISP JSON file

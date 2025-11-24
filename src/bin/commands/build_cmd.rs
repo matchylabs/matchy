@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use matchy::{glob::MatchMode, mmdb_builder::MmdbBuilder, DataValue};
+use matchy::{mmdb_builder::MmdbBuilder, DataValue, MatchMode};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead};

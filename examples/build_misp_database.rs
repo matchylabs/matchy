@@ -12,8 +12,8 @@
 
 use matchy::data_section::DataValue;
 use matchy::database::Database;
-use matchy::glob::MatchMode;
 use matchy::misp_importer::MispImporter;
+use matchy::MatchMode;
 use std::env;
 use std::fs;
 

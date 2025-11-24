@@ -3,8 +3,8 @@
 //! Shows how to set custom database_type and description fields
 
 use matchy::data_section::DataValue;
-use matchy::glob::MatchMode;
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::MatchMode;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

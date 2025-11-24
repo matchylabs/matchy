@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::glob::MatchMode;
+use matchy::bench_api::Paraglob;
 use matchy::serialization::{load, save};
-use matchy::Paraglob;
+use matchy::MatchMode;
 use std::hint::black_box;
 use std::time::Duration;
 use tempfile::NamedTempFile;

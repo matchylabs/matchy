@@ -17,9 +17,9 @@ pub fn bench_pattern_database(
     cache_hit_rate: usize,
     pattern_style: &str,
 ) -> Result<()> {
-    use matchy::glob::MatchMode;
     use matchy::mmdb_builder::MmdbBuilder;
     use matchy::Database;
+    use matchy::MatchMode;
 
     println!("--- Phase 1: Build Pattern Database ---");
     let build_start = Instant::now();

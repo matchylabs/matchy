@@ -85,9 +85,14 @@
 #![warn(clippy::all)]
 
 // Module declarations
-/// AC literal ID hash table for O(1) lookups
-pub mod ac_literal_hash;
-pub mod ac_offset;
+
+// Internal modules (implementation details)
+mod ac_literal_hash;
+mod ac_offset;
+mod glob;
+mod offset_format;
+
+// Public modules (documented API)
 /// Data section encoding/decoding for v2 format
 pub mod data_section;
 /// Unified database API
@@ -100,7 +105,6 @@ pub mod error;
 pub mod extractor;
 /// File reading utilities with automatic gzip decompression
 pub mod file_reader;
-pub mod glob;
 /// IP tree builder for MMDB format
 pub mod ip_tree_builder;
 /// Literal string hash table for O(1) exact matching
@@ -112,8 +116,9 @@ pub mod mmap;
 mod mmdb;
 /// Unified MMDB builder
 pub mod mmdb_builder;
-pub mod offset_format;
-pub mod paraglob_offset;
+
+// Legacy pattern-only API (internal)
+mod paraglob_offset;
 /// Batch processing infrastructure for efficient file analysis
 ///
 /// General-purpose building blocks for sequential or parallel line-oriented processing:
@@ -121,6 +126,7 @@ pub mod paraglob_offset;
 /// - `Worker` - Processes batches with extraction + matching  
 /// - `LineBatch`, `MatchResult`, `LineMatch` - Data structures
 pub mod processing;
+#[cfg(feature = "bench-internal")]
 pub mod serialization;
 /// SIMD-accelerated utilities for pattern matching
 ///
@@ -142,6 +148,13 @@ pub mod validation;
 
 // Public C API
 pub mod c_api;
+
+// Bench-only internal API surface (kept out of public builds)
+#[cfg(feature = "bench-internal")]
+#[doc(hidden)]
+pub mod bench_api {
+    pub use crate::paraglob_offset::{Paraglob, ParaglobBuilder};
+}
 
 // Re-exports for Rust consumers
 
@@ -191,13 +204,6 @@ pub use crate::mmdb_builder::MmdbBuilder as DatabaseBuilder;
 /// or glob pattern. Used with [`DatabaseBuilder::detect_entry_type`] for explicit
 /// type control.
 pub use crate::mmdb_builder::EntryType;
-
-// Legacy pattern-only APIs - kept for internal use and backward compatibility
-// These are not the primary public API anymore. Use Database and DatabaseBuilder instead.
-#[doc(hidden)]
-pub use crate::paraglob_offset::{Paraglob, ParaglobBuilder};
-#[doc(hidden)]
-pub use crate::serialization::{load, save};
 
 // Version information
 /// Library version string

@@ -1,5 +1,5 @@
-use matchy::glob::MatchMode;
 use matchy::literal_hash::LiteralHashBuilder;
+use matchy::MatchMode;
 use std::time::Instant;
 
 fn main() {

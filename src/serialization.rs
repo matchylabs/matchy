@@ -48,7 +48,7 @@ impl MmappedParaglob {
 ///
 /// ```no_run
 /// use matchy::paraglob_offset::Paraglob;
-/// use matchy::glob::MatchMode;
+/// use matchy::MatchMode;
 /// use matchy::serialization::save;
 ///
 /// let patterns = vec!["*.txt", "test_*"];
@@ -80,7 +80,7 @@ pub fn save<P: AsRef<Path>>(paraglob: &Paraglob, path: P) -> Result<(), Paraglob
 /// # Example
 ///
 /// ```no_run
-/// use matchy::glob::MatchMode;
+/// use matchy::MatchMode;
 /// use matchy::serialization::load;
 ///
 /// let mut pg = load("patterns.mxy", MatchMode::CaseSensitive).unwrap();
@@ -119,7 +119,7 @@ pub fn load<P: AsRef<Path>>(
 ///
 /// ```
 /// use matchy::paraglob_offset::Paraglob;
-/// use matchy::glob::MatchMode;
+/// use matchy::MatchMode;
 /// use matchy::serialization::to_bytes;
 ///
 /// let patterns = vec!["*.txt"];
@@ -141,7 +141,7 @@ pub fn to_bytes(paraglob: &Paraglob) -> Vec<u8> {
 ///
 /// ```
 /// use matchy::paraglob_offset::Paraglob;
-/// use matchy::glob::MatchMode;
+/// use matchy::MatchMode;
 /// use matchy::serialization::{to_bytes, from_bytes};
 ///
 /// let patterns = vec!["*.txt"];

@@ -198,11 +198,6 @@ impl ACLiteralHashBuilder {
 
         Ok(buffer)
     }
-
-    /// Get number of mappings
-    pub fn mapping_count(&self) -> usize {
-        self.mappings.len()
-    }
 }
 
 impl Default for ACLiteralHashBuilder {
@@ -314,51 +309,6 @@ impl<'a> ACLiteralHash<'a> {
         self.lookup(literal_id).unwrap_or_default()
     }
 
-    /// Lookup pattern IDs and write them into an existing buffer (zero allocation)
-    ///
-    /// This is O(1) average case with linear probing.
-    /// Writes pattern IDs into the provided buffer using `extend()`.
-    pub fn lookup_into(&self, literal_id: u32, output: &mut impl Extend<u32>) {
-        let hash = compute_hash(literal_id);
-        let table_size = self.header.table_size as usize;
-        let mut slot = (hash as usize) % table_size;
-
-        let entry_size = mem::size_of::<ACHashEntry>();
-
-        // Linear probing search
-        for _ in 0..table_size {
-            let entry_offset = self.table_start + slot * entry_size;
-            if entry_offset + entry_size > self.buffer.len() {
-                return;
-            }
-
-            // Use zerocopy for entry parsing
-            let entry_slice = &self.buffer[entry_offset..];
-            let (entry_ref, _) = match Ref::<_, ACHashEntry>::from_prefix(entry_slice) {
-                Ok(r) => r,
-                Err(_) => return,
-            };
-            let entry = *entry_ref;
-
-            // Empty slot - not found
-            if entry.literal_id == EMPTY_SLOT {
-                return;
-            }
-
-            // Found it!
-            if entry.literal_id == literal_id {
-                self.read_pattern_list_into(
-                    entry.patterns_offset as usize,
-                    entry.pattern_count as usize,
-                    output,
-                );
-                return;
-            }
-
-            slot = (slot + 1) % table_size;
-        }
-    }
-
     /// Read a pattern list from the patterns section
     fn read_pattern_list(&self, offset: usize, count: usize) -> Option<Vec<u32>> {
         let abs_offset = self.patterns_start + offset;
@@ -380,29 +330,5 @@ impl<'a> ACLiteralHash<'a> {
         }
 
         Some(patterns)
-    }
-
-    /// Read a pattern list directly into a buffer (zero allocation)
-    fn read_pattern_list_into(&self, offset: usize, count: usize, output: &mut impl Extend<u32>) {
-        let abs_offset = self.patterns_start + offset;
-        let bytes_needed = count * 4; // u32 = 4 bytes
-
-        if abs_offset + bytes_needed > self.buffer.len() {
-            return;
-        }
-
-        for i in 0..count {
-            let pattern_offset = abs_offset + i * 4;
-            if let Ok(bytes) = self.buffer[pattern_offset..pattern_offset + 4].try_into() {
-                let pattern_id = u32::from_le_bytes(bytes);
-                // Extend trait allows us to write directly into HashSet or Vec
-                output.extend(std::iter::once(pattern_id));
-            }
-        }
-    }
-
-    /// Get the size of this hash table in bytes
-    pub fn size(&self) -> usize {
-        self.buffer.len()
     }
 }

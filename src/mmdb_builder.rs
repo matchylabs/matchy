@@ -73,7 +73,7 @@ impl MmdbBuilder {
     /// # Example
     /// ```
     /// use matchy::mmdb_builder::MmdbBuilder;
-    /// use matchy::glob::MatchMode;
+    /// use matchy::MatchMode;
     ///
     /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
     ///     .with_database_type("MyCompany-ThreatIntel");
@@ -91,7 +91,7 @@ impl MmdbBuilder {
     /// # Example
     /// ```
     /// use matchy::mmdb_builder::MmdbBuilder;
-    /// use matchy::glob::MatchMode;
+    /// use matchy::MatchMode;
     ///
     /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
     ///     .with_description("en", "My custom threat database")
@@ -287,7 +287,7 @@ impl MmdbBuilder {
     /// # Examples
     /// ```
     /// # use matchy::mmdb_builder::{MmdbBuilder, EntryType};
-    /// # use matchy::glob::MatchMode;
+    /// # use matchy::MatchMode;
     /// // Auto-detection
     /// assert!(matches!(MmdbBuilder::detect_entry_type("1.2.3.4"), Ok(EntryType::IpAddress { .. })));
     /// assert!(matches!(MmdbBuilder::detect_entry_type("*.example.com"), Ok(EntryType::Glob(_))));

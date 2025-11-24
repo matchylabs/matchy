@@ -65,6 +65,9 @@ default = ["cli"]
 # CLI feature includes all binary dependencies
 cli = ["clap", "ctrlc", "csv"]
 
+# Benchmarks can access internal APIs when this feature is enabled
+bench-internal = []
+
 # cargo-c requires a capi feature to identify C-compatible libraries
 capi = []
 # Enable dhat heap profiling in benchmarks (dhat is always available as dev-dep)
@@ -133,6 +136,7 @@ inherits = "release"
 [[bench]]
 name = "matchy_bench"
 harness = false
+required-features = ["bench-internal"]
 
 [[bench]]
 name = "cache_bench"
@@ -148,6 +152,7 @@ harness = false
 name = "query_profile"
 path = "benches/query_profile.rs"
 harness = false
+required-features = ["bench-internal"]
 
 # Extractor performance benchmark (domain/email/IP extraction)
 [[bench]]

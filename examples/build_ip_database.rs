@@ -3,8 +3,8 @@
 //! Demonstrates how to build a database with IP addresses and CIDR ranges.
 
 use matchy::data_section::DataValue;
-use matchy::glob::MatchMode;
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::MatchMode;
 use std::collections::HashMap;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
