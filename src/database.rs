@@ -1886,7 +1886,7 @@ mod tests {
         );
         builder.add_literal("example.org", data).unwrap();
         let bytes = builder.build().unwrap();
-        
+
         // Use atomic rename to update file (works with active mmap on all platforms)
         let temp_path = db_path.with_extension("tmp");
         fs::write(&temp_path, bytes).unwrap();
