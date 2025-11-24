@@ -17,9 +17,6 @@ edit-url-template = "https://github.com/sethhall/matchy/edit/main/book/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 additional-css = ["custom.css"]
 no-section-label = true
-favicon = "theme/favicon.png"
-# SVG favicon for modern browsers with theme support
-favicon-svg = "theme/logo-light.svg"
 
 
 [output.html.fold]
@@ -31,7 +28,7 @@ editable = true
 line-numbers = true
 
 [preprocessor.project-version]
-command = "cargo run --manifest-path mdbook-project-version/Cargo.toml --quiet"
+command = "mdbook-project-version"
 
 # Enable command execution for examples (disabled - not currently used)
 # [preprocessor.cmdrun]

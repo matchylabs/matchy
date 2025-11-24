@@ -1,6 +1,6 @@
-use mdbook::book::{Book, BookItem};
-use mdbook::errors::Error;
-use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
+use mdbook_preprocessor::book::{Book, BookItem};
+use mdbook_preprocessor::errors::Result;
+use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
 use std::io;
 use std::process;
 
@@ -13,7 +13,7 @@ impl ProjectVersionPreprocessor {
     }
 
     /// Read version from project's Cargo.toml
-    fn get_version() -> Result<(String, String), Error> {
+    fn get_version() -> Result<(String, String)> {
         // Try different paths relative to where mdbook is run
         let paths = [
             "../Cargo.toml",           // From book/ directory
@@ -24,16 +24,16 @@ impl ProjectVersionPreprocessor {
         let cargo_toml = paths
             .iter()
             .find_map(|path| std::fs::read_to_string(path).ok())
-            .ok_or_else(|| Error::msg("Could not find Cargo.toml in parent directories"))?;
+            .ok_or_else(|| anyhow::anyhow!("Could not find Cargo.toml in parent directories"))?;
 
         let parsed: toml::Value = toml::from_str(&cargo_toml)
-            .map_err(|e| Error::msg(format!("Failed to parse Cargo.toml: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse Cargo.toml: {}", e))?;
 
         let version = parsed
             .get("package")
             .and_then(|p| p.get("version"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::msg("No package.version found in Cargo.toml"))?
+            .ok_or_else(|| anyhow::anyhow!("No package.version found in Cargo.toml"))?
             .to_string();
 
         // Extract minor version: "0.5.2" -> "0.5"
@@ -52,7 +52,7 @@ impl Preprocessor for ProjectVersionPreprocessor {
         "project-version"
     }
 
-    fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
+    fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
         let (version, version_minor) = Self::get_version()?;
 
         eprintln!(
@@ -73,8 +73,8 @@ impl Preprocessor for ProjectVersionPreprocessor {
         Ok(book)
     }
 
-    fn supports_renderer(&self, _renderer: &str) -> bool {
-        true
+    fn supports_renderer(&self, _renderer: &str) -> Result<bool> {
+        Ok(true)
     }
 }
 
@@ -92,8 +92,8 @@ fn main() {
     }
 }
 
-fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<(), Error> {
-    let (ctx, book) = CmdPreprocessor::parse_input(io::stdin())?;
+fn handle_preprocessing(pre: &dyn Preprocessor) -> Result<()> {
+    let (ctx, book) = mdbook_preprocessor::parse_input(io::stdin())?;
 
     let processed_book = pre.run(&ctx, book)?;
     serde_json::to_writer(io::stdout(), &processed_book)?;

@@ -8,6 +8,7 @@ name = "mdbook-project-version"
 path = "src/main.rs"
 
 [dependencies]
-mdbook = { version = "0.4", default-features = false }
+mdbook-preprocessor = "0.5"
+anyhow = "1.0"
 serde_json = "1.0"
 toml = "0.8"
