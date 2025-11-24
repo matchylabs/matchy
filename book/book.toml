@@ -1,7 +1,6 @@
 [book]
 authors = ["Seth Hall"]
 language = "en"
-multilingual = false
 src = "src"
 title = "Matchy Documentation"
 description = "Documentation for Matchy - Fast database for IP address and string matching"
