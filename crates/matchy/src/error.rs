@@ -68,3 +68,11 @@ impl From<&str> for ParaglobError {
         ParaglobError::Other(msg.to_string())
     }
 }
+
+impl From<matchy_glob::GlobError> for ParaglobError {
+    fn from(err: matchy_glob::GlobError) -> Self {
+        match err {
+            matchy_glob::GlobError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
+        }
+    }
+}

@@ -89,8 +89,10 @@
 // Internal modules (implementation details)
 mod ac_literal_hash;
 mod ac_offset;
-mod glob;
 mod offset_format;
+
+// Use extracted workspace crates
+use matchy_glob as glob;
 
 // Public modules (documented API)
 /// Data section encoding/decoding for v2 format
@@ -167,7 +169,7 @@ pub use crate::database::{
 pub use crate::data_section::DataValue;
 
 pub use crate::error::ParaglobError;
-pub use crate::glob::MatchMode;
+pub use matchy_match_mode::MatchMode;
 
 /// Unified database builder for creating databases with IP addresses and patterns
 ///

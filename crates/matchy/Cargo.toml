@@ -79,6 +79,10 @@ path = "src/bin/matchy.rs"
 required-features = ["cli"]
 
 [dependencies]
+# Workspace member crates
+matchy-match-mode = { path = "../matchy-match-mode" }
+matchy-glob = { path = "../matchy-glob" }
+
 # Keep minimal initially - add as needed
 libc = "0.2"
 memmap2 = "0.9.9"

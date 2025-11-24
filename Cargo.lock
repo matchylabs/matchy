@@ -766,6 +766,8 @@ dependencies = [
  "flate2",
  "libc",
  "lru",
+ "matchy-glob",
+ "matchy-match-mode",
  "memchr",
  "memmap2",
  "notify",
@@ -803,6 +805,9 @@ version = "1.2.2"
 [[package]]
 name = "matchy-glob"
 version = "1.2.2"
+dependencies = [
+ "matchy-match-mode",
+]
 
 [[package]]
 name = "matchy-ip-trie"
