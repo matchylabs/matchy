@@ -89,6 +89,7 @@
 // Internal modules (implementation details)
 mod ac_literal_hash;
 mod offset_format;
+mod paraglob_offset;
 
 // Use extracted workspace crates
 use matchy_glob as glob;
@@ -117,8 +118,6 @@ mod mmdb;
 /// Unified MMDB builder
 pub mod mmdb_builder;
 
-// Legacy pattern-only API (internal)
-mod paraglob_offset;
 /// Batch processing infrastructure for efficient file analysis
 ///
 /// General-purpose building blocks for sequential or parallel line-oriented processing:

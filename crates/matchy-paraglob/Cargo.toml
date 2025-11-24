@@ -5,5 +5,16 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false  # Internal crate for now
 
 [dependencies]
+matchy-match-mode = { path = "../matchy-match-mode" }
+matchy-ac = { path = "../matchy-ac" }
+matchy-glob = { path = "../matchy-glob" }
+matchy-data-format = { path = "../matchy-data-format" }
+matchy-ip-trie = { path = "../matchy-ip-trie" }  # For error.rs conversions
+zerocopy.workspace = true
+memchr.workspace = true
+anyhow.workspace = true
+rustc-hash = "2.0"  # For literal hash table
+serde = { version = "1.0", features = ["derive"] }  # For DataValue

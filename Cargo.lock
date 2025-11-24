@@ -771,6 +771,7 @@ dependencies = [
  "matchy-glob",
  "matchy-ip-trie",
  "matchy-match-mode",
+ "matchy-paraglob",
  "memchr",
  "memmap2",
  "notify",
@@ -831,6 +832,18 @@ version = "1.2.2"
 [[package]]
 name = "matchy-paraglob"
 version = "1.2.2"
+dependencies = [
+ "anyhow",
+ "matchy-ac",
+ "matchy-data-format",
+ "matchy-glob",
+ "matchy-ip-trie",
+ "matchy-match-mode",
+ "memchr",
+ "rustc-hash 2.1.1",
+ "serde",
+ "zerocopy",
+]
 
 [[package]]
 name = "memchr"
