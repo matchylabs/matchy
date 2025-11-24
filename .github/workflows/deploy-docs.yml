@@ -30,6 +30,14 @@ jobs:
         with:
           mdbook-version: 'latest'
 
+      - name: Install Rust (for preprocessors)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mdBook preprocessors
+        run: |
+          cargo install mdbook-cmdrun
+          cargo install mdbook-mermaid
+
       - name: Build book
         run: |
           cd book
