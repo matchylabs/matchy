@@ -105,7 +105,9 @@ pub mod endian;
 /// Error types for Paraglob operations
 pub mod error;
 /// Fast extraction of structured patterns (domains, IPs, emails) from text
-pub mod extractor;
+///
+/// Re-exported from matchy-extractor crate for convenience.
+pub use matchy_extractor as extractor;
 /// File reading utilities with automatic gzip decompression
 pub mod file_reader;
 /// Literal string hash table for O(1) exact matching

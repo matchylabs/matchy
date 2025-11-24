@@ -86,6 +86,7 @@ matchy-ac = { path = "../matchy-ac" }
 matchy-ip-trie = { path = "../matchy-ip-trie" }
 matchy-data-format = { path = "../matchy-data-format" }
 matchy-paraglob = { path = "../matchy-paraglob" }
+matchy-extractor = { path = "../matchy-extractor" }
 
 # Keep minimal initially - add as needed
 libc = "0.2"

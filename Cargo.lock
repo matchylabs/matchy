@@ -768,6 +768,7 @@ dependencies = [
  "lru",
  "matchy-ac",
  "matchy-data-format",
+ "matchy-extractor",
  "matchy-glob",
  "matchy-ip-trie",
  "matchy-match-mode",
@@ -809,6 +810,14 @@ dependencies = [
 [[package]]
 name = "matchy-extractor"
 version = "1.2.2"
+dependencies = [
+ "bech32",
+ "bs58",
+ "memchr",
+ "rustc-hash 2.1.1",
+ "sha2",
+ "tiny-keccak",
+]
 
 [[package]]
 name = "matchy-format"

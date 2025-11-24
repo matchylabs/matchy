@@ -5,5 +5,12 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false  # Internal crate for now - could publish later!
 
 [dependencies]
+memchr.workspace = true
+bech32 = "0.11"  # Bitcoin SegWit address decoding
+bs58 = "0.5"  # Base58 encoding for Bitcoin/Monero
+sha2 = "0.10"  # SHA256 for Bitcoin checksum validation
+tiny-keccak = { version = "2.0", features = ["keccak"] }  # Keccak256 for Ethereum
+rustc-hash = "2.0"  # Fast FxHashSet for PSL suffix validation
