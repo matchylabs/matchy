@@ -767,6 +767,7 @@ dependencies = [
  "libc",
  "lru",
  "matchy-ac",
+ "matchy-data-format",
  "matchy-glob",
  "matchy-ip-trie",
  "matchy-match-mode",
@@ -800,6 +801,9 @@ dependencies = [
 [[package]]
 name = "matchy-data-format"
 version = "1.2.2"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "matchy-extractor"

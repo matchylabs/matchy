@@ -94,10 +94,9 @@ mod offset_format;
 use matchy_glob as glob;
 use matchy_ac as ac_offset;
 use matchy_ip_trie as ip_tree_builder;
+use matchy_data_format as data_section;
 
 // Public modules (documented API)
-/// Data section encoding/decoding for v2 format
-pub mod data_section;
 /// Unified database API
 pub mod database;
 /// Endianness handling for cross-platform zero-copy support

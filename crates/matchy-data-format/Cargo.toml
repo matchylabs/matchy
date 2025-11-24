@@ -5,5 +5,8 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false  # Internal crate for now
 
+# Minimal dependencies for serialization support
 [dependencies]
+serde.workspace = true
