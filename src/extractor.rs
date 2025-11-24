@@ -5,7 +5,15 @@
 //! by fast boundary scanning.
 
 use crate::error::ParaglobError;
+use std::cell::RefCell;
 use std::net::{Ipv4Addr, Ipv6Addr};
+
+// Thread-local scratch buffers for zero-allocation extraction
+// Each thread gets its own buffers, enabling Send + Sync for Extractor
+thread_local! {
+    static BOUNDARIES_BUFFER: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    static DOT_POSITIONS_BUFFER: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Builder for Extractor
 pub struct ExtractorBuilder {
@@ -119,8 +127,6 @@ impl ExtractorBuilder {
             require_word_boundaries: self.require_word_boundaries,
             double_colon_finder,
             ox_finder,
-            boundaries_buffer: std::cell::RefCell::new(Vec::new()),
-            dot_positions_buffer: std::cell::RefCell::new(Vec::new()),
         })
     }
 }
@@ -320,6 +326,9 @@ impl<'a> Match<'a> {
 }
 
 /// Fast pattern extractor using hash-based TLD validation
+///
+/// Thread-safe: Can be wrapped in Arc and shared across threads.
+/// Uses thread-local scratch buffers for zero-allocation extraction.
 pub struct Extractor {
     // Configuration fields
     extract_domains: bool,
@@ -336,11 +345,15 @@ pub struct Extractor {
     double_colon_finder: memchr::memmem::Finder<'static>,
     /// Pre-built memchr finder for 0x (Ethereum addresses)
     ox_finder: memchr::memmem::Finder<'static>,
-    /// Reusable buffer for word boundaries (reduced allocations)
-    boundaries_buffer: std::cell::RefCell<Vec<usize>>,
-    /// Reusable buffer for dot positions (shared by IPv4 and domain extraction)
-    dot_positions_buffer: std::cell::RefCell<Vec<usize>>,
 }
+
+// SAFETY: Extractor is Send + Sync because:
+// - All fields are either Copy types (bools, usize) or 'static references (Finder)
+// - memchr::memmem::Finder is thread-safe (no interior mutability)
+// - Scratch buffers use thread-local storage (each thread has its own)
+// - No shared mutable state after construction
+unsafe impl Send for Extractor {}
+unsafe impl Sync for Extractor {}
 
 impl Extractor {
     /// Create a new extractor with default configuration
@@ -387,29 +400,40 @@ impl Extractor {
 
         // Pre-compute word boundaries once if any boundary-dependent extractors are enabled
         // This eliminates redundant scans across Bitcoin, hash, and Monero extractors
-        // Use the reusable buffer to avoid repeated allocations per chunk
         let boundaries = if self.extract_hashes || self.extract_bitcoin || self.extract_monero {
-            let mut buf = self.boundaries_buffer.borrow_mut();
-            buf.clear();
-            find_word_boundaries_into(chunk, &mut buf);
-            Some(buf)
+            BOUNDARIES_BUFFER.with(|buf_cell| {
+                let mut buf = buf_cell.borrow_mut();
+                buf.clear();
+                find_word_boundaries_into(chunk, &mut buf);
+                buf.clone()
+            })
         } else {
-            None
+            Vec::new()
         };
-        let boundaries_ref = boundaries.as_deref().map(|v| &**v);
+        let boundaries_ref = if boundaries.is_empty() {
+            None
+        } else {
+            Some(boundaries.as_slice())
+        };
 
         // Pre-compute dot positions only if BOTH IPv4 and domain extraction are enabled
         // Otherwise, use lazy iteration to avoid collecting all dots upfront
         let dot_positions = if self.extract_ipv4 && self.extract_domains {
             // Both extractors need dots - collect once and share
-            let mut buf = self.dot_positions_buffer.borrow_mut();
-            buf.clear();
-            buf.extend(memchr::memchr_iter(b'.', chunk));
-            Some(buf)
+            DOT_POSITIONS_BUFFER.with(|buf_cell| {
+                let mut buf = buf_cell.borrow_mut();
+                buf.clear();
+                buf.extend(memchr::memchr_iter(b'.', chunk));
+                buf.clone()
+            })
         } else {
-            None
+            Vec::new()
         };
-        let dots_ref = dot_positions.as_deref().map(|v| &**v);
+        let dots_ref = if dot_positions.is_empty() {
+            None
+        } else {
+            Some(dot_positions.as_slice())
+        };
 
         // Extract IPv6 (::) in one pass over entire chunk
         if self.extract_ipv6 {
@@ -1596,8 +1620,7 @@ static DOMAIN_CHAR_LOOKUP: [bool; 256] = {
 /// Fast boundary check using lookup table (branch-free, O(1))
 #[inline(always)]
 fn is_boundary_fast(b: u8) -> bool {
-    // SAFETY: b is u8, so it's always a valid index into [0..256)
-    unsafe { *BOUNDARY_LOOKUP.get_unchecked(b as usize) }
+    BOUNDARY_LOOKUP[b as usize]
 }
 
 /// Character classification helpers for fast boundary scanning
@@ -1622,8 +1645,7 @@ fn is_word_boundary(b: u8) -> bool {
 /// Returns true for valid domain chars: 0-9, a-z, A-Z, hyphen, dot, UTF-8 high bytes
 #[inline(always)]
 fn is_domain_char_fast(b: u8) -> bool {
-    // SAFETY: b is u8, so it's always a valid index into [0..256)
-    unsafe { *DOMAIN_CHAR_LOOKUP.get_unchecked(b as usize) }
+    DOMAIN_CHAR_LOOKUP[b as usize]
 }
 
 /// Find the valid TLD suffix in a domain byte slice using hash-based PSL lookup
@@ -1687,8 +1709,7 @@ static HEX_CHAR_LOOKUP: [bool; 256] = {
 /// Returns true for valid hex chars: 0-9, a-f, A-F
 #[inline(always)]
 fn is_hex_char_fast(b: u8) -> bool {
-    // SAFETY: b is u8, so it's always a valid index into [0..256)
-    unsafe { *HEX_CHAR_LOOKUP.get_unchecked(b as usize) }
+    HEX_CHAR_LOOKUP[b as usize]
 }
 
 /// SIMD hex validation using lookup table
@@ -1895,6 +1916,50 @@ mod tests {
     fn test_extractor_creation() {
         let extractor = Extractor::new().unwrap();
         assert!(extractor.extract_domains());
+    }
+
+    #[test]
+    fn test_concurrent_extraction() {
+        use std::sync::Arc;
+        use std::thread;
+
+        // Create one extractor and share across threads via Arc
+        let extractor = Arc::new(Extractor::new().unwrap());
+
+        // Spawn 8 threads, all using the same extractor concurrently
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let ext = Arc::clone(&extractor);
+                thread::spawn(move || {
+                    // Each thread does its own extraction
+                    let data = b"Check test@example.com and 192.168.1.1 and malware.evil.com";
+                    let results = ext.extract_from_chunk(data);
+
+                    // Verify we got expected matches
+                    assert!(results.len() >= 3, "Expected at least 3 matches");
+
+                    // Verify specific types
+                    let has_email = results
+                        .iter()
+                        .any(|m| matches!(m.item, ExtractedItem::Email(_)));
+                    let has_ipv4 = results
+                        .iter()
+                        .any(|m| matches!(m.item, ExtractedItem::Ipv4(_)));
+                    let has_domain = results
+                        .iter()
+                        .any(|m| matches!(m.item, ExtractedItem::Domain(_)));
+
+                    assert!(has_email, "Should extract email");
+                    assert!(has_ipv4, "Should extract IPv4");
+                    assert!(has_domain, "Should extract domain");
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
     }
 
     #[test]

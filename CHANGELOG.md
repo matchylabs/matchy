@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Extractor Thread-Safety**: `Extractor` is now `Send + Sync` and can be shared across threads via `Arc`
+  - Moved scratch buffers to thread-local storage (same pattern as `Database` and `Paraglob`)
+  - Each thread gets its own buffers for zero-allocation extraction
+  - Can now share a single `Extractor` across multiple workers instead of creating one per worker
+  - Zero performance impact - thread-local buffers provide same benefits as before
+  - Removed unnecessary `unsafe` blocks from lookup table access (compiler eliminates bounds checks)
+  - Example: `examples/concurrent_extraction.rs` demonstrates `Arc<Extractor>` usage
+
 ## [1.3.0] - 2025-11-23
 
 ### Added
