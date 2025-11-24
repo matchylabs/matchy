@@ -785,6 +785,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchy-ac"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-data-format"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-extractor"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-format"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-glob"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-ip-trie"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-match-mode"
+version = "1.2.2"
+
+[[package]]
+name = "matchy-paraglob"
+version = "1.2.2"
+
+[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

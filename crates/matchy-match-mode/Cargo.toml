@@ -1,0 +1,11 @@
+[package]
+name = "matchy-match-mode"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false  # Internal crate - just the MatchMode enum
+
+# NO dependencies - pure enum
+[dependencies]

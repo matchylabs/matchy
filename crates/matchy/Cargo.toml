@@ -1,0 +1,151 @@
+[package]
+name = "matchy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fast database for IP address and pattern matching with rich data storage"
+readme = "README.md"
+keywords = ["ip", "pattern", "database", "geoip", "matching"]
+categories = ["network-programming", "database", "algorithms"]
+# Disable automatic binary discovery - we explicitly specify binaries
+autobins = false
+autobenches = false
+include = [
+    # Source code
+    "src/**/*",
+    "benches/**/*",
+    "examples/**/*",
+    "tests/*.rs",
+    "tests/*.c",
+    "include/**/*",
+    
+    # Build configuration
+    "build.rs",
+    "cbindgen.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    
+    # Documentation
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+]
+
+# cargo-c configuration for C/C++ library installation
+[package.metadata.capi]
+min_version = "0.10.0"
+
+[package.metadata.capi.header]
+name = "matchy"
+subdirectory = "matchy"  # Install headers to <prefix>/include/matchy/
+generation = true        # Use cbindgen to generate headers
+
+[package.metadata.capi.install.include]
+# Install additional headers from the include directory  
+asset = [{from = "include/matchy/maxminddb.h"}]
+
+[package.metadata.capi.pkg_config]
+name = "matchy"
+filename = "matchy"
+# Override Cflags to point to includedir, not includedir/matchy
+# This allows #include <matchy/matchy.h> to work correctly
+strip_include_path_components = 1
+
+[lib]
+name = "matchy"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+# Default includes CLI for `cargo install` compatibility
+default = ["cli"]
+
+# CLI feature includes all binary dependencies
+cli = ["clap", "ctrlc", "csv"]
+
+# Benchmarks can access internal APIs when this feature is enabled
+bench-internal = []
+
+# cargo-c requires a capi feature to identify C-compatible libraries
+capi = []
+# Enable dhat heap profiling in benchmarks (dhat is always available as dev-dep)
+dhat-heap = []
+
+[[bin]]
+name = "matchy"
+path = "src/bin/matchy.rs"
+required-features = ["cli"]
+
+[dependencies]
+# Keep minimal initially - add as needed
+libc = "0.2"
+memmap2 = "0.9.9"
+zerocopy = { version = "0.8.27", features = ["derive"] }  # Safe binary format access
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+rustc-hash = "2.0"  # Fast FxHash for literal pattern lookups
+xxhash-rust = { version = "0.8", features = ["xxh64"] }  # Stable XXH64 for on-disk hashing
+lru = "0.16"  # LRU cache for query results
+memchr = "2.7"  # SIMD-accelerated byte searching
+rayon = "1.10"  # Parallel sort for large hash builds
+flate2 = { version = "1.1", features = ["zlib-rs"], default-features = false }  # Gzip with fastest zlib-rs backend
+bs58 = "0.5"  # Base58 encoding/decoding for Bitcoin/Monero addresses
+sha2 = "0.10"  # SHA256 for Bitcoin checksum validation
+tiny-keccak = { version = "2.0", features = ["keccak"] }  # Keccak256 for Ethereum checksum validation
+bech32 = "0.11"  # Bech32 encoding for Bitcoin SegWit addresses
+notify = "8.2"  # File watching for database auto-reload
+arc-swap = "1.7"  # Lock-free Arc swapping for zero-overhead database reloading
+
+# CLI-only dependencies (optional)
+clap = { version = "4.5", features = ["derive", "cargo"], optional = true }
+csv = { version = "1.3", optional = true }
+ctrlc = { version = "3.5", optional = true }
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winsock2", "ws2def", "ws2ipdef"] }
+
+[dev-dependencies]
+# Testing dependencies
+criterion = "0.7"
+proptest = "1.9"
+tempfile = "3.8"
+rand = "0.9"
+dhat = "0.3"  # Heap profiling for benchmarks
+assert_cmd = "2.1"  # CLI integration testing
+predicates = "3.0"  # Assertions for command output
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[[bench]]
+name = "matchy_bench"
+harness = false
+required-features = ["bench-internal"]
+
+[[bench]]
+name = "cache_bench"
+harness = false
+
+# MMDB database building benchmark (tests deduplication optimization)
+[[bench]]
+name = "mmdb_build_bench"
+harness = false
+
+# Memory profiling tool (not a Criterion benchmark)
+[[bench]]
+name = "query_profile"
+path = "benches/query_profile.rs"
+harness = false
+required-features = ["bench-internal"]
+
+# Extractor performance benchmark (domain/email/IP extraction)
+[[bench]]
+name = "extractor_bench"
+harness = false
+
+# Auto-reload overhead benchmark (lock-free Arc vs RwLock)
+[[bench]]
+name = "reload_overhead_bench"
+harness = false
