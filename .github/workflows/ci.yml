@@ -167,8 +167,9 @@ jobs:
             cargo install cbindgen
           run: |
             cargo build --verbose
-            cargo test --lib --verbose
-            echo "FreeBSD build successful!"
+            cargo test --verbose
+            cargo test --test integration_tests --verbose
+            echo "FreeBSD tests successful!"
 
   security:
     name: Security Audit
