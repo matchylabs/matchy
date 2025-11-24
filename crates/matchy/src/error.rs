@@ -76,3 +76,15 @@ impl From<matchy_glob::GlobError> for ParaglobError {
         }
     }
 }
+
+impl From<matchy_ac::ACError> for ParaglobError {
+    fn from(err: matchy_ac::ACError) -> Self {
+        match err {
+            matchy_ac::ACError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
+            matchy_ac::ACError::ResourceLimitExceeded(msg) => {
+                ParaglobError::ResourceLimitExceeded(msg)
+            }
+            matchy_ac::ACError::InvalidInput(msg) => ParaglobError::Other(msg),
+        }
+    }
+}

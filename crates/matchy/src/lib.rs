@@ -88,11 +88,11 @@
 
 // Internal modules (implementation details)
 mod ac_literal_hash;
-mod ac_offset;
 mod offset_format;
 
 // Use extracted workspace crates
 use matchy_glob as glob;
+use matchy_ac as ac_offset;
 
 // Public modules (documented API)
 /// Data section encoding/decoding for v2 format

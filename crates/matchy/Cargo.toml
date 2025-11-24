@@ -82,6 +82,7 @@ required-features = ["cli"]
 # Workspace member crates
 matchy-match-mode = { path = "../matchy-match-mode" }
 matchy-glob = { path = "../matchy-glob" }
+matchy-ac = { path = "../matchy-ac" }
 
 # Keep minimal initially - add as needed
 libc = "0.2"
