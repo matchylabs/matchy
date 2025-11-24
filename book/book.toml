@@ -33,9 +33,9 @@ line-numbers = true
 [preprocessor.project-version]
 command = "cargo run --manifest-path mdbook-project-version/Cargo.toml --quiet"
 
-# Enable command execution for examples
-[preprocessor.cmdrun]
-command = "./run-cmdrun.sh"
+# Enable command execution for examples (disabled - not currently used)
+# [preprocessor.cmdrun]
+# command = "./run-cmdrun.sh"
 
 
 # Enable Mermaid diagrams
