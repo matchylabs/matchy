@@ -59,46 +59,18 @@ pub enum IpVersion {
     V6,
 }
 
-/// Record size in bits
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordSize {
-    /// 24-bit records (3 bytes per record, 6 bytes per node)
-    Bits24 = 24,
-    /// 28-bit records (3.5 bytes per record, 7 bytes per node)
-    Bits28 = 28,
-    /// 32-bit records (4 bytes per record, 8 bytes per node)
-    Bits32 = 32,
-}
+// Re-export RecordSize from ip-trie (it's an IP trie concern, not MMDB-specific)
+pub use matchy_ip_trie::RecordSize;
 
-impl RecordSize {
-    /// Get the size of a single record in bytes (may be fractional)
-    pub fn record_bytes(self) -> f64 {
-        match self {
-            RecordSize::Bits24 => 3.0,
-            RecordSize::Bits28 => 3.5,
-            RecordSize::Bits32 => 4.0,
-        }
-    }
-
-    /// Get the size of a node (2 records) in bytes
-    pub fn node_bytes(self) -> usize {
-        match self {
-            RecordSize::Bits24 => 6,
-            RecordSize::Bits28 => 7,
-            RecordSize::Bits32 => 8,
-        }
-    }
-
-    /// Create from bit size
-    pub fn from_bits(bits: u16) -> Result<Self, MmdbError> {
-        match bits {
-            24 => Ok(RecordSize::Bits24),
-            28 => Ok(RecordSize::Bits28),
-            32 => Ok(RecordSize::Bits32),
-            _ => Err(MmdbError::InvalidFormat(format!(
-                "Invalid record size: {} bits",
-                bits
-            ))),
-        }
+// Helper function for MMDB metadata parsing
+pub fn record_size_from_bits(bits: u16) -> Result<RecordSize, MmdbError> {
+    match bits {
+        24 => Ok(RecordSize::Bits24),
+        28 => Ok(RecordSize::Bits28),
+        32 => Ok(RecordSize::Bits32),
+        _ => Err(MmdbError::InvalidFormat(format!(
+            "Invalid record size: {} bits",
+            bits
+        ))),
     }
 }

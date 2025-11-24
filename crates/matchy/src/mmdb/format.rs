@@ -9,7 +9,7 @@
 //! - Tree traversal works with pure offsets (zero allocation)
 //! - Data decoding only allocates when returning results to users
 
-use super::types::{IpVersion, MmdbError, RecordSize, METADATA_MARKER};
+use super::types::{record_size_from_bits, IpVersion, MmdbError, RecordSize, METADATA_MARKER};
 use crate::data_section::{DataDecoder, DataValue};
 
 /// MMDB file header - minimal heap usage
@@ -62,7 +62,7 @@ impl MmdbHeader {
             }
         };
 
-        let record_size = RecordSize::from_bits(record_size_bits)?;
+        let record_size = record_size_from_bits(record_size_bits)?;
 
         let ip_version = match ip_version_num {
             4 => IpVersion::V4,

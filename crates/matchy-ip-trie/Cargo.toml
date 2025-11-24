@@ -5,5 +5,7 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false  # Internal crate for now
 
+# No dependencies - pure IP trie data structure
 [dependencies]

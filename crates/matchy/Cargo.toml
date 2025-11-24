@@ -83,6 +83,7 @@ required-features = ["cli"]
 matchy-match-mode = { path = "../matchy-match-mode" }
 matchy-glob = { path = "../matchy-glob" }
 matchy-ac = { path = "../matchy-ac" }
+matchy-ip-trie = { path = "../matchy-ip-trie" }
 
 # Keep minimal initially - add as needed
 libc = "0.2"

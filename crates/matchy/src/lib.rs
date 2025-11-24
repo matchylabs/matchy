@@ -93,6 +93,7 @@ mod offset_format;
 // Use extracted workspace crates
 use matchy_glob as glob;
 use matchy_ac as ac_offset;
+use matchy_ip_trie as ip_tree_builder;
 
 // Public modules (documented API)
 /// Data section encoding/decoding for v2 format
@@ -107,8 +108,6 @@ pub mod error;
 pub mod extractor;
 /// File reading utilities with automatic gzip decompression
 pub mod file_reader;
-/// IP tree builder for MMDB format
-pub mod ip_tree_builder;
 /// Literal string hash table for O(1) exact matching
 pub mod literal_hash;
 /// MISP JSON threat intelligence importer

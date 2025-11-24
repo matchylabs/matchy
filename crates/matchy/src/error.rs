@@ -88,3 +88,15 @@ impl From<matchy_ac::ACError> for ParaglobError {
         }
     }
 }
+
+impl From<matchy_ip_trie::IpTreeError> for ParaglobError {
+    fn from(err: matchy_ip_trie::IpTreeError) -> Self {
+        match err {
+            matchy_ip_trie::IpTreeError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
+            matchy_ip_trie::IpTreeError::ResourceLimitExceeded(msg) => {
+                ParaglobError::ResourceLimitExceeded(msg)
+            }
+            matchy_ip_trie::IpTreeError::Other(msg) => ParaglobError::Other(msg),
+        }
+    }
+}
