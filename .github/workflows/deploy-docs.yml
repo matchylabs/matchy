@@ -35,8 +35,12 @@ jobs:
 
       - name: Install mdBook preprocessors
         run: |
-          cargo install mdbook-cmdrun
           cargo install mdbook-mermaid
+
+      - name: Build custom project-version preprocessor
+        run: |
+          cd book/mdbook-project-version
+          cargo build --release
 
       - name: Build book
         run: |
