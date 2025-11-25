@@ -261,7 +261,7 @@ impl From<MatchyError> for std::io::Error {
 }
 ```
 
-### To Box<dyn Error>
+### To `Box<dyn Error>`
 
 ```rust
 fn do_work() -> Result<(), Box<dyn std::error::Error>> {

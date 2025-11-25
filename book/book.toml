@@ -28,7 +28,7 @@ editable = true
 line-numbers = true
 
 [preprocessor.project-version]
-command = "mdbook-project-version"
+command = "./run-project-version.sh"
 
 # Enable command execution for examples (disabled - not currently used)
 # [preprocessor.cmdrun]

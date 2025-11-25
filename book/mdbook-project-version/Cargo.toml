@@ -3,6 +3,9 @@ name = "mdbook-project-version"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+# Standalone package, not part of parent workspace
+
 [[bin]]
 name = "mdbook-project-version"
 path = "src/main.rs"
