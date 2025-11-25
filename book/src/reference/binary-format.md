@@ -244,12 +244,12 @@ let nodes = get_node_array(&mmap, header.nodes_offset)?;
 
 Format is platform-independent:
 
-- **Endianness**: All multi-byte values are big-endian
+- **Endianness**: Native byte order (little-endian on x86/ARM). Marker stored for future big-endian support if needed.
 - **Alignment**: Conservative alignment for all platforms
 - **Sizes**: Fixed-size types (`u32`, not `size_t`)
 - **ABI**: `#[repr(C)]` structures
 
-A database built on Linux/x86-64 works on macOS/ARM64.
+A database built on Linux/x86-64 works on macOS/ARM64 (both little-endian).
 
 ## Future Extensions
 

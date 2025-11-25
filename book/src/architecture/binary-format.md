@@ -75,7 +75,10 @@ struct LiteralEntry {
 
 ## Endianness
 
-All multi-byte integers use **big-endian** (network byte order).
+All multi-byte integers use **native byte order** (little-endian on x86/ARM via `#[repr(C)]`).
+
+The format stores an endianness marker (0x01 for little-endian) for future compatibility,
+but currently only little-endian is supported since it represents >99.9% of deployments.
 
 ## Alignment
 
