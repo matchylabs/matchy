@@ -192,7 +192,7 @@ The extended section adds **zero overhead** to IP lookups.
 
 ## See Also
 
-- [Binary Format Details](architecture/binary-format.md) - Low-level format specification
+- [Binary Format Details](binary-format.md) - Low-level format specification
 - [MMDB Quick Start](mmdb-quickstart.md) - Getting started with MMDB compatibility
-- [System Architecture](architecture/overview.md) - Overall system design
-- [Performance Benchmarks](architecture/performance-results.md) - Detailed performance analysis
+- [System Architecture](architecture.md) - Overall system design
+- [Performance Benchmarks](benchmarks.md) - Detailed performance analysis

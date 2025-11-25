@@ -1,41 +1,79 @@
 # Binary Format Specification
 
-Matchy databases use the MaxMind DB (MMDB) format with custom extensions for string and pattern matching.
+Detailed binary format specification for Matchy databases.
+
+Matchy databases use the MaxMind DB (MMDB) format with optional extensions for string and pattern matching.
 
 ## Overview
 
-The format has two main sections:
+The format has three main components:
 
 1. **MMDB Section**: Standard MaxMind DB format for IP address lookups
-2. **PARAGLOB Section**: Custom extension for string/pattern matching
+2. **PARAGLOB Section**: Optional extension for glob pattern matching
+3. **String Literals Hash Section**: Optional extension for exact string matching
 
-Both sections coexist in a single `.mxy` file.
+All components coexist in a single `.mxy` file.
 
 ## File Structure
 
+**Note**: The MMDB format is unusual - it has no header or magic bytes at the start. The file begins directly with the IP search tree, and all metadata is stored at the end of the file.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  MMDB Metadata (start of file)               │  Standard MMDB header
+│  IP Search Tree (Binary Trie)                │  Starts at byte 0
 ├─────────────────────────────────────────────────────────┤
-│  IP Address Trie                              │  Binary trie for IP lookups
+│  16-byte separator                            │
 ├─────────────────────────────────────────────────────────┤
-│  Data Section                                  │  MMDB data values
+│  Data Section (Shared)                        │  MMDB data values
 ├─────────────────────────────────────────────────────────┤
-│  Search Tree Metadata                         │  Marks end of MMDB section
+│  MMDB_PATTERN separator (optional)            │  "MMDB_PATTERN\x00\x00\x00\x00"
 ├─────────────────────────────────────────────────────────┤
-│  PARAGLOB Section Marker                      │  Magic bytes: "PARAGLOB"
+│  PARAGLOB SECTION (optional)                  │  Glob pattern matching
 ├─────────────────────────────────────────────────────────┤
-│  Pattern Matching Automaton                   │  Aho-Corasick state machine
+│  MMDB_LITERAL separator (optional)            │  "MMDB_LITERAL\x00\x00\x00\x00"
 ├─────────────────────────────────────────────────────────┤
-│  Exact String Hash Table                      │  O(1) string lookups
+│  STRING LITERALS HASH SECTION (optional)      │  O(1) exact string lookups
+├─────────────────────────────────────────────────────────┤
+│  Metadata Marker                              │  "\xAB\xCD\xEFMaxMind.com"
+├─────────────────────────────────────────────────────────┤
+│  MMDB Metadata (within last 128KB)            │  node_count, record_size, etc.
 └─────────────────────────────────────────────────────────┘
 ```
 
+### Section Descriptions
+
+**IP Search Tree**: Binary trie for IP address lookups. This is the first data in the file (offset 0). The tree structure depends on metadata fields that are only available after parsing the metadata at the end of the file.
+
+**Data Section**: Shared MMDB-encoded data values referenced by all query types (IP, pattern, and literal lookups).
+
+**PARAGLOB Section**: Optional section for glob pattern matching. Only present if the database contains patterns with wildcards (e.g., `*.example.com`).
+
+**String Literals Hash Section**: Optional hash table for O(1) exact string matching. Only present if the database contains literal strings (non-wildcard patterns).
+
+**MMDB Metadata**: Contains essential database information:
+- `node_count`: Number of nodes in the IP search tree
+- `record_size`: Size of tree records (24, 28, or 32 bits)
+- `ip_version`: IPv4 (4) or IPv6 (6)
+- `pattern_section_offset`: Offset to PARAGLOB section (0 if absent)
+- `literal_section_offset`: Offset to literal hash section (0 if absent)
+- Build timestamp, database type, description, etc.
+
+The metadata marker (`\xAB\xCD\xEFMaxMind.com`) is located within the last 128KB of the file. Parsers search backwards from the end to find it.
+
 ## MMDB Section
 
-### Header
+The file follows the standard MaxMind DB format:
+- See [MaxMind DB Spec](https://maxmind.github.io/MaxMind-DB/)
 
-Standard MMDB metadata map at the start of the file:
+Key characteristics:
+- No header at start of file
+- File begins with IP search tree data at offset 0
+- Metadata stored at end of file for fast tail access
+- Memory-mappable with zero-copy access
+
+### Metadata
+
+Standard MMDB metadata map at the end of the file (after metadata marker):
 
 ```json
 {
@@ -89,89 +127,43 @@ MMDB-format data types:
 
 See [MaxMind DB Format](https://maxmind.github.io/MaxMind-DB/) for encoding details.
 
-## PARAGLOB Section
+## PARAGLOB Section Format
 
-Located after the MMDB search tree metadata.
-
-### Section Header
+When glob patterns are present, the PARAGLOB section contains:
 
 ```rust
+#[repr(C)]
 struct ParaglobHeader {
-    magic: [u8; 8],      // "PARAGLOB"
-    version: u32,        // Format version (currently 1)
-    num_nodes: u32,      // Automaton node count
-    nodes_offset: u32,   // Offset to node array
-    num_edges: u32,      // Total edge count
-    edges_offset: u32,   // Offset to edge array
-    strings_size: u32,   // Size of string table
-    strings_offset: u32, // Offset to string table
-    hash_size: u32,      // Hash table size
-    hash_offset: u32,    // Offset to hash table
+    magic: [u8; 8],           // "PARAGLOB"
+    version: u32,             // Format version (currently 5)
+    match_mode: u32,          // 0=CaseSensitive, 1=CaseInsensitive
+    ac_node_count: u32,       // Number of AC automaton nodes
+    ac_nodes_offset: u32,     // Offset to node array
+    // ... additional fields for pattern data
 }
 ```
 
-**Size**: 44 bytes, aligned to 8-byte boundary
+Followed by:
+- Aho-Corasick automaton nodes and edges
+- Pattern metadata entries
+- Glob segment data
+- Pattern-to-data mappings
 
-### Automaton Nodes
+See `matchy-format/src/offset_format.rs` for the complete `ParaglobHeader` structure (112 bytes in v5).
 
-Array of Aho-Corasick automaton nodes:
+## String Literals Hash Section Format
+
+When literal strings are present, a hash table section provides O(1) lookups:
 
 ```rust
-struct AcNode {
-    failure_offset: u32,    // Offset to failure node
-    edges_offset: u32,      // Offset to first edge
-    num_edges: u16,         // Number of outgoing edges
-    is_terminal: u8,        // 1 if pattern ends here
-    pattern_id: u32,        // Pattern ID if terminal
-    data_offset: u32,       // Offset to associated data
+// Hash table with open addressing
+struct LiteralHashSection {
+    // Serialized hash table from matchy-literal-hash
+    // Format: capacity + array of (hash, pattern_id, data_offset)
 }
 ```
 
-**Size**: 19 bytes per node, aligned
-
-### Edges
-
-Array of state transitions:
-
-```rust
-struct AcEdge {
-    byte: u8,          // Input byte
-    target_offset: u32, // Target node offset
-}
-```
-
-**Size**: 5 bytes per edge
-
-Edges are sorted by byte value for binary search.
-
-### String Table
-
-Concatenated null-terminated strings:
-
-```
-offset 0: "example.com\0"
-offset 12: "*.google.com\0"
-offset 25: "test\0"
-...
-```
-
-Referenced by offset from other structures.
-
-### Hash Table
-
-For exact string matching:
-
-```rust
-struct HashBucket {
-    string_offset: u32,  // Offset into string table
-    data_offset: u32,    // Offset to data
-    next_offset: u32,    // Next bucket (collision chain)
-}
-```
-
-**Size**: 12 bytes per bucket
-
-Hash function: FNV-1a
+See `matchy-literal-hash` crate for implementation details.
 
 ## Data Alignment
 
@@ -198,27 +190,34 @@ Special values:
 
 ## Version History
 
-### Version 1 (Current)
+### Version 5 (Current)
 
-- Initial format
+- Serialized glob segments for zero-copy loading
+- Optimized memory layout with ACNodeHot (16 bytes)
 - Support for patterns, exact strings, and IP addresses
 - Aho-Corasick automaton for pattern matching
-- Hash table for exact matches
+- Separate hash table for exact literal matches
 - Embedded MMDB data format
+
+### Previous Versions
+
+- **v4**: ACNodeHot (20-byte) for 50% memory reduction
+- **v3**: AC literal mapping for O(1) zero-copy loading
+- **v2**: Data section support for pattern-associated data
+- **v1**: Original format, patterns only
 
 ## Format Validation
 
 Matchy validates these invariants on load:
 
-1. **Magic bytes match**: MMDB at start, "PARAGLOB" at extension
-2. **Version supported**: Only version 1 currently
+1. **Magic bytes match**: "\xAB\xCD\xEFMaxMind.com" at end, "PARAGLOB" if pattern section present
+2. **Version supported**: PARAGLOB version 5 currently
 3. **Offsets in bounds**: All offsets point within file
 4. **Alignment correct**: Structures properly aligned
-5. **No cycles**: Failure links form a DAG
-6. **Strings null-terminated**: All strings end with `\0`
-7. **Edge ordering**: Edges sorted by byte value
+5. **Section offsets**: Metadata contains correct `pattern_section_offset` and `literal_section_offset`
+6. **File size**: Must be at least large enough for tree + metadata
 
-Validation errors result in `CorruptData` errors.
+Validation errors result in format errors. See `matchy validate` command for detailed validation.
 
 ## Memory Mapping
 
