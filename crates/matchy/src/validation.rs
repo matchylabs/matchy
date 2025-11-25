@@ -37,13 +37,15 @@
 
 use crate::error::{MatchyError, Result};
 use crate::offset_format::{
-    MetaWordMapping, ParaglobHeader, PatternDataMapping, PatternEntry, MAGIC,
-    MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1, MATCHY_FORMAT_VERSION_V2,
-    MATCHY_FORMAT_VERSION_V3,
+    ParaglobHeader, PatternDataMapping, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1,
+    MATCHY_FORMAT_VERSION_V2, MATCHY_FORMAT_VERSION_V3,
 };
-// AC structures come from matchy-ac, not matchy-format
+// AC and pattern structures come from matchy-ac and matchy-paraglob
+// TODO: This deep validation logic should be moved into matchy-paraglob itself
+// to properly encapsulate paraglob internals. For now, we import what we need.
 use matchy_ac::{ACEdge, ACNodeHot, StateKind};
 use matchy_paraglob::error::ParaglobError;
+use matchy_paraglob::offset_format::{MetaWordMapping, PatternEntry};
 use std::collections::HashSet;
 use std::fs::File;
 use std::mem;

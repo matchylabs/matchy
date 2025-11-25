@@ -1,31 +1,35 @@
 //! Offset-based binary format for zero-copy memory mapping
 //!
-//! This module defines the binary format used for serializing and loading
-//! Paraglob pattern matchers. The format uses byte offsets instead of pointers,
-//! allowing it to be memory-mapped and used directly without deserialization.
+//! This module defines the **format-level** structures for matchy databases.
+//! It orchestrates the overall .mxy file structure but delegates component-specific
+//! details to their respective crates (matchy-paraglob, matchy-ip-trie, etc.).
+//!
+//! # Architectural Separation
+//!
+//! - **matchy-format**: Knows about section boundaries, offsets, and sizes
+//! - **matchy-paraglob**: Owns its internal structures (AC nodes, patterns, etc.)
+//! - **matchy-ip-trie**: Owns IP address trie structures
+//! - **matchy-data-format**: Owns data encoding structures
 //!
 //! # Format Overview
 //!
 //! The format consists of C-compatible packed structs that can be cast directly
 //! from bytes. All references use byte offsets from the start of the buffer.
 //!
-//! # Layout
+//! # High-Level Layout
 //!
 //! ```text
-//! [Header: ParaglobHeader (v5: 112 bytes)]
-//! [AC Nodes: ACNode array]
-//! [AC Edges: ACEdge arrays (variable, referenced by nodes)]
-//! [AC Pattern IDs: u32 arrays (variable, referenced by nodes)]
-//! [Pattern Entries: PatternEntry array]
-//! [Pattern Strings: null-terminated UTF-8]
-//! [Meta-word mappings: MetaWordMapping array]
-//! [Pattern reference arrays: u32 arrays]
-//! [Single wildcards: SingleWildcard array]
+//! [ParaglobHeader (v5: 112 bytes)] - Points to all sections
+//! [Paraglob section] - Internal structure owned by matchy-paraglob
+//! [Data section: optional (v2+)] - Encoded by matchy-data-format
+//! [Data mappings: PatternDataMapping array (v2+)]
 //! [Glob Segments: GlobSegmentIndex + segment data (v5+)]
-//! [Data section: optional (v2+)]
-//! [Data mappings: optional (v2+)]
-//! [AC Literal Mapping: optional (v3+)]
 //! ```
+//!
+//! matchy-format only defines structures it directly reads/writes:
+//! - `ParaglobHeader` - section pointers and sizes
+//! - `PatternDataMapping` - maps patterns to data offsets
+//! - `GlobSegmentIndex` / `GlobSegmentHeader` / `CharClassItemEncoded` - glob segment structures
 //!
 //! # Design Principles
 //!
@@ -174,58 +178,6 @@ pub struct ParaglobHeader {
     pub glob_segments_size: u32,
 }
 
-/// Pattern entry (16 bytes, 8-byte aligned)
-///
-/// Metadata about a single glob pattern in the database.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct PatternEntry {
-    /// Pattern ID (matches IDs used in AC automaton)
-    pub pattern_id: u32,
-
-    /// Pattern type: 0=Literal, 1=Glob
-    pub pattern_type: u8,
-
-    /// Reserved for alignment
-    pub reserved: [u8; 3],
-
-    /// Offset to pattern string (null-terminated UTF-8)
-    pub pattern_string_offset: u32,
-
-    /// Length of pattern string (not including null)
-    pub pattern_string_length: u32,
-}
-
-/// Meta-word to pattern mapping (12 bytes, 4-byte aligned)
-///
-/// Maps a meta-word (literal segment from AC automaton) to all patterns
-/// that contain it. Used for hybrid AC + glob matching.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct MetaWordMapping {
-    /// Meta-word string offset
-    pub meta_word_offset: u32,
-
-    /// Offset to array of pattern IDs (u32[])
-    pub pattern_ids_offset: u32,
-
-    /// Number of patterns containing this meta-word
-    pub pattern_count: u32,
-}
-
-/// Single wildcard entry (8 bytes, 4-byte aligned)
-///
-/// Represents a pattern with only wildcards (*, ?) and no literals.
-/// These must be checked separately since they don't have AC matches.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct SingleWildcard {
-    /// Pattern ID
-    pub pattern_id: u32,
-
-    /// Offset to pattern string
-    pub pattern_string_offset: u32,
-}
 
 /// Pattern-to-data mapping entry (12 bytes, 4-byte aligned)
 ///
@@ -320,9 +272,6 @@ pub struct CharClassItemEncoded {
 
 // Compile-time size assertions to ensure struct layout
 const _: () = assert!(mem::size_of::<ParaglobHeader>() == 112); // v5: 8-byte magic + 26 * u32 fields
-const _: () = assert!(mem::size_of::<PatternEntry>() == 16);
-const _: () = assert!(mem::size_of::<MetaWordMapping>() == 12);
-const _: () = assert!(mem::size_of::<SingleWildcard>() == 8);
 const _: () = assert!(mem::size_of::<PatternDataMapping>() == 12);
 const _: () = assert!(mem::size_of::<GlobSegmentIndex>() == 8);
 const _: () = assert!(mem::size_of::<GlobSegmentHeader>() == 12);
@@ -421,35 +370,9 @@ impl ParaglobHeader {
             }
         }
 
-        // TODO: Paraglob section should validate its own internal structures
-        // matchy-format shouldn't know about AC nodes - that's a paraglob implementation detail
-
-        // Validate patterns section
-        if self.pattern_count > 0 {
-            let offset = self.patterns_offset as usize;
-            let size = (self.pattern_count as usize) * mem::size_of::<PatternEntry>();
-            if offset.checked_add(size).is_none_or(|end| end > buffer_len) {
-                return Err("Patterns section out of bounds");
-            }
-        }
-
-        // Validate pattern strings section
-        if self.pattern_strings_size > 0 {
-            let start = self.pattern_strings_offset as usize;
-            let size = self.pattern_strings_size as usize;
-            if start.checked_add(size).is_none_or(|end| end > buffer_len) {
-                return Err("Pattern strings section out of bounds");
-            }
-        }
-
-        // Validate meta-word mappings
-        if self.meta_word_mapping_count > 0 {
-            let offset = self.meta_word_mappings_offset as usize;
-            let size = (self.meta_word_mapping_count as usize) * mem::size_of::<MetaWordMapping>();
-            if offset.checked_add(size).is_none_or(|end| end > buffer_len) {
-                return Err("Meta-word mappings section out of bounds");
-            }
-        }
+        // NOTE: Paraglob section validates its own internal structures.
+        // matchy-format only validates format-level concerns (data sections, mappings).
+        // AC nodes, patterns, meta-words are all paraglob implementation details.
 
         Ok(())
     }
@@ -475,18 +398,6 @@ impl ParaglobHeader {
     }
 }
 
-impl PatternEntry {
-    /// Create a new pattern entry
-    pub fn new(pattern_id: u32, pattern_type: u8) -> Self {
-        Self {
-            pattern_id,
-            pattern_type,
-            reserved: [0; 3],
-            pattern_string_offset: 0,
-            pattern_string_length: 0,
-        }
-    }
-}
 
 /// Helper to safely read a struct from a byte buffer at an offset
 ///
@@ -623,12 +534,6 @@ mod tests {
     fn test_header_size() {
         assert_eq!(mem::size_of::<ParaglobHeader>(), 112); // v5: 8-byte magic + 26 * u32
         assert_eq!(mem::align_of::<ParaglobHeader>(), 4);
-    }
-
-    #[test]
-    fn test_pattern_entry_size() {
-        assert_eq!(mem::size_of::<PatternEntry>(), 16);
-        assert_eq!(mem::align_of::<PatternEntry>(), 4);
     }
 
     #[test]
