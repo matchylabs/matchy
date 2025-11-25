@@ -3,9 +3,9 @@
 // Bug: When a /32 single IP is loaded BEFORE the /24 subnet it belongs to,
 // the lookup for that IP fails to return the most specific match.
 
-use matchy::data_section::DataValue;
 use matchy::database::{Database, QueryResult};
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

@@ -86,7 +86,6 @@
 
 // Module declarations
 
-
 // Public modules (documented API)
 /// Unified database API
 pub mod database;
@@ -102,10 +101,6 @@ pub mod file_reader;
 pub mod misp_importer;
 
 // Re-export format modules from matchy-format
-/// Endianness handling for cross-platform zero-copy support
-pub use matchy_format::endian;
-/// Literal string hash table for O(1) exact matching
-pub use matchy_literal_hash as literal_hash;
 /// Memory-mapped file handling
 pub use matchy_format::mmap;
 /// MMDB format implementation (internal)
@@ -114,6 +109,8 @@ use matchy_format::mmdb;
 pub use matchy_format::mmdb_builder;
 /// Offset format structures
 pub use matchy_format::offset_format;
+/// Literal string hash table for O(1) exact matching
+pub use matchy_literal_hash as literal_hash;
 
 /// Batch processing infrastructure for efficient file analysis
 ///
@@ -162,8 +159,13 @@ pub use crate::database::{
 /// Data value type for database entries
 pub use matchy_data_format::DataValue;
 
-pub use crate::error::ParaglobError;
+/// Main error type for matchy operations
+pub use crate::error::{MatchyError, Result};
+/// Match mode for text operations (case sensitive/insensitive)
 pub use matchy_match_mode::MatchMode;
+
+// Re-export component error types for advanced users
+pub use crate::error::{FormatError, ParaglobError};
 
 /// Unified database builder for creating databases with IP addresses and patterns
 ///

@@ -3,10 +3,10 @@
 //! This module provides a modern, clean C API for building and querying databases
 //! containing IP addresses and patterns. This is the primary public API.
 
-use matchy_data_format::DataValue;
 use crate::database::{Database as RustDatabase, QueryResult};
-use matchy_glob::MatchMode;
 use crate::mmdb_builder::MmdbBuilder;
+use matchy_data_format::DataValue;
+use matchy_glob::MatchMode;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;

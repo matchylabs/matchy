@@ -329,19 +329,24 @@ impl ACBuilder {
         let edges_start = nodes_size;
         let edges_size = sparse_edges * edge_size;
 
-        // Calculate padding to align dense section to 64-byte boundary
+        // Calculate padding to align dense section to 64-byte boundary (only if we have dense lookups)
         // DenseLookup now has #[repr(C, align(64))] for cache-line alignment
         let unaligned_dense_start = edges_start + edges_size;
         let dense_alignment = mem::align_of::<DenseLookup>(); // 64 bytes
-        let dense_padding =
-            (dense_alignment - (unaligned_dense_start % dense_alignment)) % dense_alignment;
-        let dense_start = unaligned_dense_start + dense_padding;
+        let (dense_padding, dense_start) = if dense_count > 0 {
+            let padding =
+                (dense_alignment - (unaligned_dense_start % dense_alignment)) % dense_alignment;
+            (padding, unaligned_dense_start + padding)
+        } else {
+            // No dense lookups, so no need for padding - patterns come right after edges
+            (0, unaligned_dense_start)
+        };
         let dense_size_total = dense_count * dense_size;
 
         let patterns_start = dense_start + dense_size_total;
         let patterns_size = total_patterns * mem::size_of::<u32>();
 
-        // Calculate total size (including alignment padding)
+        // Calculate total size (including alignment padding only if we have dense lookups)
         let total_size = nodes_size + edges_size + dense_padding + dense_size_total + patterns_size;
 
         // Reasonable size limit to prevent pathological inputs from causing OOM
@@ -476,7 +481,7 @@ impl ACBuilder {
                 StateKind::One => edges[0].1,
                 _ => 0,
             };
-            
+
             let node = ACNodeHot {
                 state_kind: kind as u8,
                 one_char,
@@ -519,9 +524,7 @@ impl ACAutomaton {
     /// This constructs the offset-based binary format directly.
     pub fn build(patterns: &[&str], mode: MatchMode) -> Result<Self, ACError> {
         if patterns.is_empty() {
-            return Err(ACError::InvalidPattern(
-                "No patterns provided".to_string(),
-            ));
+            return Err(ACError::InvalidPattern("No patterns provided".to_string()));
         }
 
         let mut builder = ACBuilder::new(mode);

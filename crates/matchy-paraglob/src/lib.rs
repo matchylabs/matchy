@@ -4,12 +4,11 @@
 //! in a single optimized data structure.
 
 // Internal modules
-mod paraglob_offset;
 pub(crate) mod literal_hash;
+mod paraglob_offset;
 
 // Temporary modules until Phase 8 (will be extracted to matchy-format)
-pub(crate) mod endian;
-pub mod error;  // Public so matchy-format can use ParaglobError
+pub mod error; // Public so matchy-format can use ParaglobError
 pub(crate) mod offset_format;
 pub(crate) mod simd_utils;
 

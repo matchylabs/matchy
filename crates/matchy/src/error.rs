@@ -1,116 +1,53 @@
-/// Error types for the matchy library
-use std::fmt;
+//! Error types for the matchy library
+//!
+//! Matchy uses a unified error type that wraps errors from all sub-components.
+//! This provides clean error handling while maintaining proper abstraction boundaries.
 
-/// Result type alias for paraglob operations
-pub type Result<T> = std::result::Result<T, ParaglobError>;
+use thiserror::Error;
 
-/// Main error type for paraglob operations
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParaglobError {
-    /// Pattern-related errors
-    InvalidPattern(String),
+/// Main error type for matchy operations
+///
+/// This error type wraps all possible errors that can occur during matchy operations,
+/// including pattern matching, database format operations, and I/O.
+#[derive(Error, Debug)]
+pub enum MatchyError {
+    /// Error from paraglob pattern matching operations
+    #[error(transparent)]
+    Paraglob(#[from] matchy_paraglob::error::ParaglobError),
 
-    /// I/O errors
-    Io(String),
+    /// Error from database format operations
+    #[error(transparent)]
+    Format(#[from] matchy_format::FormatError),
 
-    /// Memory mapping errors
-    Mmap(String),
+    /// I/O error
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 
-    /// Format/parsing errors
-    Format(String),
+    /// Database error
+    #[error("{0}")]
+    Database(String),
 
-    /// Validation errors
+    /// Validation error
+    #[error("{0}")]
     Validation(String),
-
-    /// Serialization/deserialization errors
-    SerializationError(String),
-
-    /// Resource limit exceeded (e.g., too many states, too much memory)
-    ResourceLimitExceeded(String),
-
-    /// General errors
-    Other(String),
 }
 
-impl fmt::Display for ParaglobError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParaglobError::InvalidPattern(msg) => write!(f, "Invalid pattern: {}", msg),
-            ParaglobError::Io(msg) => write!(f, "I/O error: {}", msg),
-            ParaglobError::Mmap(msg) => write!(f, "Memory mapping error: {}", msg),
-            ParaglobError::Format(msg) => write!(f, "Format error: {}", msg),
-            ParaglobError::Validation(msg) => write!(f, "Validation error: {}", msg),
-            ParaglobError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
-            ParaglobError::ResourceLimitExceeded(msg) => {
-                write!(f, "Resource limit exceeded: {}", msg)
-            }
-            ParaglobError::Other(msg) => write!(f, "{}", msg),
-        }
+/// Result type alias for matchy operations
+pub type Result<T> = std::result::Result<T, MatchyError>;
+
+// Convenient conversions for common error types
+impl From<String> for MatchyError {
+    fn from(s: String) -> Self {
+        MatchyError::Database(s)
     }
 }
 
-impl std::error::Error for ParaglobError {}
-
-impl From<std::io::Error> for ParaglobError {
-    fn from(err: std::io::Error) -> Self {
-        ParaglobError::Io(err.to_string())
+impl From<&str> for MatchyError {
+    fn from(s: &str) -> Self {
+        MatchyError::Database(s.to_string())
     }
 }
 
-impl From<String> for ParaglobError {
-    fn from(msg: String) -> Self {
-        ParaglobError::Other(msg)
-    }
-}
-
-impl From<&str> for ParaglobError {
-    fn from(msg: &str) -> Self {
-        ParaglobError::Other(msg.to_string())
-    }
-}
-
-impl From<matchy_glob::GlobError> for ParaglobError {
-    fn from(err: matchy_glob::GlobError) -> Self {
-        match err {
-            matchy_glob::GlobError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
-        }
-    }
-}
-
-impl From<matchy_ac::ACError> for ParaglobError {
-    fn from(err: matchy_ac::ACError) -> Self {
-        match err {
-            matchy_ac::ACError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
-            matchy_ac::ACError::ResourceLimitExceeded(msg) => {
-                ParaglobError::ResourceLimitExceeded(msg)
-            }
-            matchy_ac::ACError::InvalidInput(msg) => ParaglobError::Other(msg),
-        }
-    }
-}
-
-impl From<matchy_ip_trie::IpTreeError> for ParaglobError {
-    fn from(err: matchy_ip_trie::IpTreeError) -> Self {
-        match err {
-            matchy_ip_trie::IpTreeError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
-            matchy_ip_trie::IpTreeError::ResourceLimitExceeded(msg) => {
-                ParaglobError::ResourceLimitExceeded(msg)
-            }
-            matchy_ip_trie::IpTreeError::Other(msg) => ParaglobError::Other(msg),
-        }
-    }
-}
-
-impl From<matchy_format::FormatError> for ParaglobError {
-    fn from(err: matchy_format::FormatError) -> Self {
-        match err {
-            matchy_format::FormatError::InvalidIpAddress(msg) 
-            | matchy_format::FormatError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
-            matchy_format::FormatError::IoError(msg) => ParaglobError::Io(msg),
-            matchy_format::FormatError::IpTreeError(msg)
-            | matchy_format::FormatError::PatternError(msg)
-            | matchy_format::FormatError::LiteralHashError(msg)
-            | matchy_format::FormatError::Other(msg) => ParaglobError::Other(msg),
-        }
-    }
-}
+// Re-export component error types for users who need them
+pub use matchy_format::FormatError;
+pub use matchy_paraglob::error::ParaglobError;

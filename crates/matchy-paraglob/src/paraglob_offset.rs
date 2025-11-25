@@ -15,14 +15,14 @@
 //!
 //! All matching operations work directly on this buffer using offsets.
 
-use matchy_ac::{ACAutomaton, MatchMode as ACMatchMode};
-use matchy_data_format::{DataEncoder, DataValue};
 use crate::error::ParaglobError;
-use matchy_glob::{CharClassItem, GlobPattern, GlobSegment, MatchMode as GlobMatchMode};
 use crate::offset_format::{
     read_cstring, ACEdge, GlobSegmentIndex, ParaglobHeader, PatternDataMapping, PatternEntry,
     SingleWildcard,
 };
+use matchy_ac::{ACAutomaton, MatchMode as ACMatchMode};
+use matchy_data_format::{DataEncoder, DataValue};
+use matchy_glob::{CharClassItem, GlobPattern, GlobSegment, MatchMode as GlobMatchMode};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
@@ -504,7 +504,7 @@ impl ParaglobBuilder {
                 },
             };
 
-            // Serialize header to bytes
+            // Serialize header to bytes (12 bytes per header, no padding)
             segment_data.push(adjusted_header.segment_type);
             segment_data.push(adjusted_header.flags);
             segment_data.extend_from_slice(&adjusted_header.reserved.to_le_bytes());
@@ -829,7 +829,7 @@ impl ParaglobBuilder {
                 glob_segments_start + i * mem::size_of::<crate::offset_format::GlobSegmentIndex>();
             // Adjust offsets to be relative to buffer start
             let adjusted_index = crate::offset_format::GlobSegmentIndex {
-                first_segment_offset: (glob_segments_start as u32) + index.first_segment_offset,
+                first_segment_offset: glob_segments_start as u32 + index.first_segment_offset,
                 segment_count: index.segment_count,
                 reserved: index.reserved,
             };
@@ -974,7 +974,6 @@ impl Paraglob {
     }
 
     /// Build Paraglob from patterns
-    #[cfg(any(test, feature = "bench-internal"))]
     pub fn build_from_patterns(
         patterns: &[&str],
         mode: GlobMatchMode,
@@ -1010,7 +1009,6 @@ impl Paraglob {
     ///     MatchMode::CaseSensitive
     /// ).unwrap();
     /// ```
-    #[cfg(any(test, feature = "bench-internal"))]
     pub fn build_from_patterns_with_data(
         patterns: &[&str],
         data: Option<&[Option<DataValue>]>,
@@ -1252,6 +1250,10 @@ impl Paraglob {
             if node.pattern_count > 0 {
                 let patterns_offset = node.patterns_offset as usize;
                 let pattern_count = node.pattern_count as usize;
+                eprintln!(
+                    "  AC node at offset {} has {} patterns at offset {}",
+                    current_offset, pattern_count, patterns_offset
+                );
 
                 // SAFETY: Read u32 array directly - HOT PATH (4-byte aligned)
                 unsafe {
@@ -1259,6 +1261,10 @@ impl Paraglob {
                         let ids_ptr = ac_buffer.as_ptr().add(patterns_offset) as *const u32;
                         for i in 0..pattern_count {
                             let pattern_id = ids_ptr.add(i).read();
+                            eprintln!(
+                                "    AC found pattern_id={} at patterns_offset={}",
+                                pattern_id, patterns_offset
+                            );
                             matches.insert(pattern_id);
                         }
                     }
@@ -1370,9 +1376,15 @@ impl Paraglob {
         mode: GlobMatchMode,
         glob_segments_offset: usize,
     ) -> Result<bool, ParaglobError> {
+        eprintln!(
+            "match_glob_from_buffer: pattern_id={}, text={}, glob_segments_offset={}",
+            pattern_id, text, glob_segments_offset
+        );
+
         // Read GlobSegmentIndex for this pattern
         let index_offset =
             glob_segments_offset + (pattern_id as usize) * mem::size_of::<GlobSegmentIndex>();
+        eprintln!("  index_offset={}", index_offset);
 
         if index_offset + mem::size_of::<GlobSegmentIndex>() > buffer.len() {
             return Ok(false); // Invalid index, treat as no match
@@ -1643,11 +1655,10 @@ impl Paraglob {
     /// Load from buffer (for deserialization)
     ///
     /// Used internally by the `serialization` module's `from_bytes()` function.
-    /// Takes ownership of a Vec<u8> for owned buffer storage.
+    /// Takes ownership of a `Vec<u8>` for owned buffer storage.
     ///
     /// Uses ACLiteralHash for O(1) AC literal lookups. Load time is O(1) since
     /// the hash table is already serialized in the buffer.
-    #[cfg(any(test, feature = "bench-internal"))]
     pub fn from_buffer(buffer: Vec<u8>, mode: GlobMatchMode) -> Result<Self, ParaglobError> {
         if buffer.len() < mem::size_of::<ParaglobHeader>() {
             return Err(ParaglobError::SerializationError(
@@ -1742,9 +1753,7 @@ impl Paraglob {
                 )));
             }
             let hash_slice = &slice[hash_offset..];
-            Some(crate::literal_hash::ACLiteralHash::from_buffer(
-                hash_slice,
-            )?)
+            Some(crate::literal_hash::ACLiteralHash::from_buffer(hash_slice)?)
         } else {
             None
         };
@@ -1846,7 +1855,6 @@ impl Paraglob {
     }
 
     /// Check if this Paraglob has data section support (v2 format)
-    #[cfg(any(test, feature = "bench-internal"))]
     pub fn has_data_section(&self) -> bool {
         let buffer = self.buffer.as_slice();
         if buffer.len() < mem::size_of::<ParaglobHeader>() {

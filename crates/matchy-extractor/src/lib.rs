@@ -196,7 +196,7 @@ impl HashType {
     ///
     /// # Example
     /// ```
-    /// # use matchy::extractor::HashType;
+    /// # use matchy_extractor::HashType;
     /// assert_eq!(HashType::Md5.type_name(), "MD5");
     /// assert_eq!(HashType::Sha256.type_name(), "SHA256");
     /// ```
@@ -245,7 +245,7 @@ impl<'a> ExtractedItem<'a> {
     ///
     /// # Example
     /// ```
-    /// # use matchy::extractor::Extractor;
+    /// # use matchy_extractor::Extractor;
     /// # let extractor = Extractor::new().unwrap();
     /// let line = b"Check example.com and 192.168.1.1";
     /// for match_item in extractor.extract_from_line(line) {
@@ -283,7 +283,7 @@ impl<'a> ExtractedItem<'a> {
     ///
     /// # Example
     /// ```
-    /// # use matchy::extractor::Extractor;
+    /// # use matchy_extractor::Extractor;
     /// # let extractor = Extractor::new().unwrap();
     /// let line = b"Check 192.168.1.1 and example.com";
     /// let values: Vec<String> = extractor
@@ -375,9 +375,13 @@ impl Extractor {
     /// This is more efficient than collecting into a Vec.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use matchy_extractor::Extractor;
+    ///
+    /// let extractor = Extractor::new().unwrap();
+    /// let line = b"Check example.com and 192.168.1.1";
     /// for match_item in extractor.extract_from_line(line) {
-    ///     // Process each match
+    ///     println!("{}: {}", match_item.item.type_name(), match_item.as_str(line));
     /// }
     /// ```
     pub fn extract_from_line<'a>(&'a self, line: &'a [u8]) -> ExtractIter<'a> {
@@ -394,9 +398,13 @@ impl Extractor {
     /// Returns matches with absolute byte positions in the chunk.
     ///
     /// # Example
-    /// ```ignore
-    /// let chunk = b"line1\nline2\nline3";
+    /// ```
+    /// use matchy_extractor::Extractor;
+    ///
+    /// let extractor = Extractor::new().unwrap();
+    /// let chunk = b"test@example.com\n192.168.1.1\nmalware.com";
     /// let matches = extractor.extract_from_chunk(chunk);
+    /// assert!(matches.len() > 0);
     /// ```
     pub fn extract_from_chunk<'a>(&'a self, chunk: &'a [u8]) -> Vec<Match<'a>> {
         let mut matches = Vec::new();

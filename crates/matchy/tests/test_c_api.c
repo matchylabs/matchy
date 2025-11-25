@@ -85,8 +85,8 @@ int main() {
         fprintf(stderr, "Failed to open with default options\n");
         return 1;
     }
-    printf("✓ Opened with default options (cache: %u, trusted: %u)\n", 
-           opts.cache_capacity, opts.trusted);
+    printf("✓ Opened with default options (cache: %u)\n", 
+           opts.cache_capacity);
     
     // Verify it works
     result = matchy_query(db2, "test_file.txt");
@@ -142,26 +142,26 @@ int main() {
     matchy_close(db4);
     printf("✓ Multiple queries work with custom cache\n");
     
-    // Test 4: Open with trusted mode
+    // Test 4: Open with auto-reload disabled (explicit)
     matchy_init_open_options(&opts);
-    opts.trusted = 1;  // Skip validation
+    opts.auto_reload = 0;  // Explicit disable (default is false anyway)
     opts.cache_capacity = 1000;
     
     matchy_t* db5 = matchy_open_with_options(tmpfile, &opts);
     if (db5 == NULL) {
-        fprintf(stderr, "Failed to open with trusted mode\n");
+        fprintf(stderr, "Failed to open with auto-reload disabled\n");
         return 1;
     }
-    printf("✓ Opened with trusted mode\n");
+    printf("✓ Opened with auto-reload disabled\n");
     
     result = matchy_query(db5, "test_file.txt");
     if (!result.found) {
-        fprintf(stderr, "Query failed in trusted mode\n");
+        fprintf(stderr, "Query failed with auto-reload disabled\n");
         return 1;
     }
     matchy_free_result(&result);
     matchy_close(db5);
-    printf("✓ Query works in trusted mode\n");
+    printf("✓ Query works with auto-reload disabled\n");
     
     // Test 5: NULL pointer checks
     printf("\n--- Testing error handling ---\n");

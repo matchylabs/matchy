@@ -16,13 +16,13 @@
 //! # Example
 //!
 //! ```no_run
-//! use matchy::mmap::MmapFile;
+//! use matchy_format::mmap::MmapFile;
 //!
 //! let mmap = MmapFile::open("database.paraglob")?;
 //! let header = mmap.paraglob_header();
 //! println!("Magic: {:?}", &header.magic);
 //! println!("Size: {} bytes", mmap.size());
-//! # Ok::<(), matchy::mmap::MmapError>(())
+//! # Ok::<(), matchy_format::mmap::MmapError>(())
 //! ```
 
 use crate::offset_format::{ParaglobHeader, MAGIC, MATCHY_FORMAT_VERSION};
@@ -154,10 +154,10 @@ impl MmapFile {
     /// # Example
     ///
     /// ```no_run
-    /// use matchy::mmap::MmapFile;
+    /// use matchy_format::mmap::MmapFile;
     ///
     /// let mmap = MmapFile::open("database.paraglob")?;
-    /// # Ok::<(), matchy::mmap::MmapError>(())
+    /// # Ok::<(), matchy_format::mmap::MmapError>(())
     /// ```
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, MmapError> {
         let file = File::open(path.as_ref())?;

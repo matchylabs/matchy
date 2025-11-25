@@ -73,3 +73,23 @@ impl From<&str> for FormatError {
         FormatError::Other(s.to_string())
     }
 }
+
+// Conversion: FormatError -> ParaglobError
+// This allows code that uses ParaglobError to also accept FormatError.
+// When matchy-format operations fail, they can be converted into ParaglobError
+// so the caller can handle both types uniformly.
+impl From<FormatError> for matchy_paraglob::error::ParaglobError {
+    fn from(err: FormatError) -> Self {
+        use matchy_paraglob::error::ParaglobError;
+        match err {
+            FormatError::InvalidIpAddress(msg) | FormatError::InvalidPattern(msg) => {
+                ParaglobError::InvalidPattern(msg)
+            }
+            FormatError::IoError(msg) => ParaglobError::Io(msg),
+            FormatError::IpTreeError(msg)
+            | FormatError::PatternError(msg)
+            | FormatError::LiteralHashError(msg)
+            | FormatError::Other(msg) => ParaglobError::Other(msg),
+        }
+    }
+}

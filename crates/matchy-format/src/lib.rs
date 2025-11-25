@@ -8,7 +8,6 @@
 //! The format orchestrates all three components into a unified .mxy file.
 
 // Public modules
-pub mod endian;
 pub mod error;
 pub mod mmap;
 pub mod mmdb;
@@ -17,6 +16,6 @@ pub mod offset_format;
 
 // Re-exports for convenience
 pub use error::FormatError;
+pub use matchy_literal_hash;
 pub use mmdb_builder::MmdbBuilder;
 pub use offset_format::*;
-pub use matchy_literal_hash;

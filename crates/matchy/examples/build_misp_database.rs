@@ -10,9 +10,9 @@
 //!   cargo run --example build_misp_database -- misp-example.json
 //!   cargo run --example build_misp_database -- file1.json file2.json file3.json
 
-use matchy::data_section::DataValue;
 use matchy::database::Database;
 use matchy::misp_importer::MispImporter;
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::env;
 use std::fs;

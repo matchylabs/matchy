@@ -5,7 +5,7 @@ UNAME_S := $(shell uname -s)
 
 # Compiler settings
 CC = clang
-CFLAGS = -Wall -Wextra -std=c11 -I./include
+CFLAGS = -Wall -Wextra -std=c11 -I./crates/matchy/include
 LDFLAGS = -L./target/release
 
 ifeq ($(UNAME_S),Darwin)
@@ -18,9 +18,9 @@ endif
 RUST_LIB = target/release/libmatchy.a
 
 # Test targets
-C_TEST = tests/test_c_api
-C_EXT_TEST = tests/test_c_api_extensions
-MMDB_TEST = tests/test_mmdb_compat
+C_TEST = crates/matchy/tests/test_c_api
+C_EXT_TEST = crates/matchy/tests/test_c_api_extensions
+MMDB_TEST = crates/matchy/tests/test_mmdb_compat
 
 .PHONY: all clean test test-c test-c-ext test-mmdb build-rust ci-local ci-quick fmt clippy docs check-docs
 
@@ -29,22 +29,22 @@ all: build-rust test
 # Build Rust library
 build-rust:
 	@echo "Building Rust library..."
-	@cargo build --release
+	@cargo build --release -p matchy
 
 # Build C test
-$(C_TEST): tests/test_c_api.c $(RUST_LIB)
+$(C_TEST): crates/matchy/tests/test_c_api.c $(RUST_LIB)
 	@echo "Building C API tests..."
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 # Build C API extensions test
-$(C_EXT_TEST): tests/test_c_api_extensions.c $(RUST_LIB)
+$(C_EXT_TEST): crates/matchy/tests/test_c_api_extensions.c $(RUST_LIB)
 	@echo "Building C API extensions tests..."
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
 
 # Build MMDB compatibility test
-$(MMDB_TEST): tests/test_mmdb_compat.c src/c_api/mmdb_varargs.c $(RUST_LIB)
+$(MMDB_TEST): crates/matchy/tests/test_mmdb_compat.c crates/matchy/src/c_api/mmdb_varargs.c $(RUST_LIB)
 	@echo "Building MMDB compatibility tests..."
-	$(CC) $(CFLAGS) tests/test_mmdb_compat.c src/c_api/mmdb_varargs.c -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) crates/matchy/tests/test_mmdb_compat.c crates/matchy/src/c_api/mmdb_varargs.c -o $@ $(LDFLAGS)
 
 # Run C tests
 test-c: $(C_TEST)
@@ -124,36 +124,36 @@ fmt:
 # Run clippy lints
 clippy:
 	@echo "\n🔍 Running clippy lints..."
-	@cargo clippy --all-targets --all-features -- -D warnings
+	@cargo clippy --workspace --all-targets --all-features -- -D warnings
 	@if [ "$$(uname -m)" = "arm64" ]; then \
 		echo "🔍 Also checking x86_64 target (since we're on ARM)..."; \
 		rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true; \
-		cargo clippy --all-targets --all-features --target x86_64-unknown-linux-gnu -- -D warnings; \
+		cargo clippy --workspace --all-targets --all-features --target x86_64-unknown-linux-gnu -- -D warnings; \
 	fi
 	@echo "✅ Clippy OK"
 
 # Check documentation builds without warnings
 check-docs:
 	@echo "\n📚 Checking documentation..."
-	@RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+	@RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 	@echo "✅ Documentation OK"
 
 # Alternative: just build docs (allows warnings)
 docs:
 	@echo "\n📚 Building documentation..."
-	@cargo doc --no-deps --document-private-items --open
+	@cargo doc --workspace --no-deps --document-private-items --open
 
 # Run Rust tests
 test-rust:
 	@echo "\n🧪 Running Rust tests..."
-	@cargo test --verbose
-	@cargo test --test integration_tests --verbose
+	@cargo test --workspace --verbose
+	@cargo test -p matchy --test integration_tests --verbose
 	@echo "✅ Tests OK"
 
 # Run doc tests
 test-doc:
 	@echo "\n📖 Running doc tests..."
-	@cargo test --doc
+	@cargo test --workspace --doc
 	@echo "✅ Doc tests OK"
 
 # Help

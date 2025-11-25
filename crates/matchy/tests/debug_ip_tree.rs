@@ -14,7 +14,7 @@ fn debug_simple_sparse_ips() {
 
     println!("Inserting 0.0.0.3");
     let mut unique_data = HashMap::new();
-    unique_data.insert("id".to_string(), matchy::data_section::DataValue::Uint32(3));
+    unique_data.insert("id".to_string(), matchy::DataValue::Uint32(3));
     builder.add_ip("0.0.0.3", unique_data).unwrap();
 
     println!("Building database...");

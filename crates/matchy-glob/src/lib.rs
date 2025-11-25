@@ -15,8 +15,8 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use matchy::glob::{GlobPattern, MatchMode};
+//! ```
+//! use matchy_glob::{GlobPattern, MatchMode, GlobError};
 //!
 //! // Simple wildcard matching
 //! let pattern = GlobPattern::new("*.txt", MatchMode::CaseSensitive)?;
@@ -34,7 +34,7 @@
 //! let pattern = GlobPattern::new("file[!0-9].txt", MatchMode::CaseSensitive)?;
 //! assert!(pattern.matches("fileA.txt"));
 //! assert!(!pattern.matches("file1.txt"));
-//! # Ok::<(), matchy::GlobError>(())
+//! # Ok::<(), GlobError>(())
 //! ```
 
 use std::fmt;
@@ -114,12 +114,12 @@ impl GlobPattern {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use matchy::glob::{GlobPattern, MatchMode};
+    /// ```
+    /// use matchy_glob::{GlobPattern, MatchMode, GlobError};
     ///
     /// let pattern = GlobPattern::new("*.txt", MatchMode::CaseSensitive)?;
     /// assert!(pattern.matches("hello.txt"));
-    /// # Ok::<(), matchy::GlobError>(())
+    /// # Ok::<(), GlobError>(())
     /// ```
     pub fn new(pattern: &str, mode: MatchMode) -> Result<Self, GlobError> {
         let segments = Self::parse(pattern, mode)?;
@@ -167,14 +167,14 @@ impl GlobPattern {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use matchy::glob::{GlobPattern, MatchMode};
+    /// ```
+    /// use matchy_glob::{GlobPattern, MatchMode, GlobError};
     ///
     /// let pattern = GlobPattern::new("hello*world", MatchMode::CaseSensitive)?;
     /// assert!(pattern.matches("hello world"));
     /// assert!(pattern.matches("hello beautiful world"));
     /// assert!(!pattern.matches("goodbye world"));
-    /// # Ok::<(), matchy::GlobError>(())
+    /// # Ok::<(), GlobError>(())
     /// ```
     pub fn matches(&self, text: &str) -> bool {
         // Limit backtracking steps to prevent OOM with pathological patterns

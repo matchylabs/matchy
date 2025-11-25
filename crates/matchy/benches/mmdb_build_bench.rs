@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::data_section::DataValue;
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
 use std::hint::black_box;

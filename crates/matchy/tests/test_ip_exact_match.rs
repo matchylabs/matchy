@@ -3,9 +3,9 @@
 //! This test ensures that when individual IP addresses (as /32s) are inserted,
 //! only those exact IPs are matched, not broader CIDR ranges.
 
-use matchy::data_section::DataValue;
 use matchy::database::Database;
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

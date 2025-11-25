@@ -35,12 +35,15 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::error::{ParaglobError, Result};
+use crate::error::{MatchyError, Result};
 use crate::offset_format::{
-    ACEdge, ACNodeHot, MetaWordMapping, ParaglobHeader, PatternDataMapping, PatternEntry,
-    StateKind, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1, MATCHY_FORMAT_VERSION_V2,
+    MetaWordMapping, ParaglobHeader, PatternDataMapping, PatternEntry, MAGIC,
+    MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1, MATCHY_FORMAT_VERSION_V2,
     MATCHY_FORMAT_VERSION_V3,
 };
+// AC structures come from matchy-ac, not matchy-format
+use matchy_ac::{ACEdge, ACNodeHot, StateKind};
+use matchy_paraglob::error::ParaglobError;
 use std::collections::HashSet;
 use std::fs::File;
 use std::mem;
@@ -1008,14 +1011,16 @@ fn validate_paraglob_section(
 /// Read and parse the PARAGLOB header
 fn read_paraglob_header(buffer: &[u8]) -> Result<ParaglobHeader> {
     if buffer.len() < mem::size_of::<ParaglobHeader>() {
-        return Err(ParaglobError::Format(
+        return Err(MatchyError::Paraglob(ParaglobError::Format(
             "File too small to contain header".to_string(),
-        ));
+        )));
     }
 
     let header = ParaglobHeader::read_from_prefix(buffer)
         .map(|(h, _)| h)
-        .map_err(|_| ParaglobError::Format("Failed to read header".to_string()))?;
+        .map_err(|_| {
+            MatchyError::Paraglob(ParaglobError::Format("Failed to read header".to_string()))
+        })?;
 
     Ok(header)
 }
@@ -1315,15 +1320,19 @@ fn validate_ac_structure(
         // max_depth tracking removed
 
         // Validate state kind
-        let state_kind = StateKind::from_u8(node.state_kind);
-        if state_kind.is_none() {
-            report.error(format!(
-                "AC node {} has invalid state kind: {}",
-                i, node.state_kind
-            ));
-            continue;
-        }
-        let state_kind = state_kind.unwrap();
+        let state_kind = match node.state_kind {
+            0 => StateKind::Empty,
+            1 => StateKind::One,
+            2 => StateKind::Sparse,
+            3 => StateKind::Dense,
+            _ => {
+                report.error(format!(
+                    "AC node {} has invalid state kind: {}",
+                    i, node.state_kind
+                ));
+                continue;
+            }
+        };
         state_distribution[state_kind as usize] += 1;
 
         // Validate failure link
@@ -1653,13 +1662,16 @@ fn validate_ac_reachability(
             Err(_) => continue,
         };
 
-        let state_kind = StateKind::from_u8(node.state_kind);
-        if state_kind.is_none() {
-            continue;
-        }
+        let state_kind = match node.state_kind {
+            0 => StateKind::Empty,
+            1 => StateKind::One,
+            2 => StateKind::Sparse,
+            3 => StateKind::Dense,
+            _ => continue,
+        };
 
         // Follow all edges to mark children as reachable
-        match state_kind.unwrap() {
+        match state_kind {
             StateKind::Empty => {}
             StateKind::One => {
                 // Single edge stored inline in edges_offset

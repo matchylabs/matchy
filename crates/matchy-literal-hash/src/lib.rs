@@ -52,7 +52,9 @@ pub enum LiteralHashError {
 impl std::fmt::Display for LiteralHashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LiteralHashError::InvalidFormat(msg) => write!(f, "Invalid literal hash format: {}", msg),
+            LiteralHashError::InvalidFormat(msg) => {
+                write!(f, "Invalid literal hash format: {}", msg)
+            }
         }
     }
 }
@@ -170,12 +172,6 @@ impl LiteralHashBuilder {
             return Ok(Vec::new());
         }
 
-        let start = std::time::Instant::now();
-        eprintln!(
-            "[LiteralHash] Building hash table for {} patterns...",
-            self.patterns.len()
-        );
-
         // Determine number of shards adaptively based on dataset size
         // Small datasets: fewer shards to avoid memory overhead
         // Large datasets: more shards for parallelism
@@ -187,18 +183,11 @@ impl LiteralHashBuilder {
             6 // 64 shards for large datasets
         };
         let num_shards = 1 << shard_bits;
-        eprintln!(
-            "[LiteralHash] Using {} shards for {} patterns",
-            num_shards,
-            self.patterns.len()
-        );
 
         // We'll calculate per-shard capacity during build (after partitioning)
         // to avoid allocating huge empty tables
-        eprintln!("[LiteralHash] Partitioning will determine per-shard sizes...");
 
         // Partition entries into shards by top shard_bits of hash
-        eprintln!("[LiteralHash] Partitioning into shards...");
         let mut shard_buckets: Vec<Vec<(String, u32, u64)>> =
             (0..num_shards).map(|_| Vec::new()).collect();
 
@@ -207,10 +196,6 @@ impl LiteralHashBuilder {
             let shard_id = (hash as usize) % num_shards;
             shard_buckets[shard_id].push((pattern, pattern_id, hash));
         }
-        eprintln!(
-            "[LiteralHash] Partitioned into shards ({:?})",
-            start.elapsed()
-        );
 
         // Build shards in batches to limit memory usage
         // Batch size scales with available parallelism (respects RAYON_NUM_THREADS)
@@ -218,15 +203,10 @@ impl LiteralHashBuilder {
             .map(|n| n.get())
             .unwrap_or(8);
         let batch_size = parallelism.min(num_shards).max(1);
-        eprintln!(
-            "[LiteralHash] Building shards in batches ({} at a time, {} cores available)...",
-            batch_size, parallelism
-        );
         let mut shards = Vec::with_capacity(num_shards);
 
         for chunk_start in (0..num_shards).step_by(batch_size) {
             let chunk_end = (chunk_start + batch_size).min(num_shards);
-            eprintln!("[LiteralHash]   Batch {}-{}...", chunk_start, chunk_end - 1);
 
             let mut chunk: Vec<Shard> = shard_buckets[chunk_start..chunk_end]
                 .par_iter_mut()
@@ -241,10 +221,7 @@ impl LiteralHashBuilder {
             shards.append(&mut chunk);
         }
 
-        eprintln!("[LiteralHash] All shards built ({:?})", start.elapsed());
-
         // Concatenate shards into final table and string pool
-        eprintln!("[LiteralHash] Concatenating shards...");
         let table_size: usize = shards.iter().map(|s| s.table.len()).sum();
         let mut final_table = Vec::with_capacity(table_size);
         let mut final_string_pool = Vec::new();
@@ -274,7 +251,6 @@ impl LiteralHashBuilder {
             final_string_pool.extend(shard.strings);
             pool_offset += shard_pool_size;
         }
-        eprintln!("[LiteralHash] Shards concatenated ({:?})", start.elapsed());
 
         // Calculate offsets
         let header_size = 32; // Fixed: 4 bytes magic + 7 u32 fields
@@ -368,7 +344,6 @@ impl LiteralHashBuilder {
             buffer.set_len(mappings_start + mappings_size);
         }
 
-        eprintln!("[LiteralHash] Total build time: {:?}", start.elapsed());
         Ok(buffer)
     }
 

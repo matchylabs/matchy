@@ -6,8 +6,8 @@
 #![cfg(feature = "bench-internal")]
 
 use matchy::bench_api::Paraglob;
-use matchy::data_section::DataValue;
 use matchy::serialization::{from_bytes, to_bytes};
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

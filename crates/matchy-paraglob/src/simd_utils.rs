@@ -30,8 +30,8 @@ use std::arch::aarch64::*;
 /// * `output` - Pre-allocated Vec to write lowercase bytes into
 ///
 /// # Example
-/// ```
-/// use matchy::simd_utils::ascii_lowercase_simd;
+/// ```ignore
+/// use matchy_paraglob::simd_utils::ascii_lowercase_simd;
 ///
 /// let text = b"Hello WORLD!";
 /// let mut output = Vec::with_capacity(text.len());
@@ -143,8 +143,8 @@ unsafe fn ascii_lowercase_simd_arm(text: &[u8], output: &mut Vec<u8>) {
 /// * `output` - Pre-allocated Vec to write lowercase bytes into
 ///
 /// # Example
-/// ```
-/// use matchy::simd_utils::ascii_lowercase_simd;
+/// ```ignore
+/// use matchy_paraglob::simd_utils::ascii_lowercase_simd;
 ///
 /// let text = b"Hello WORLD!";
 /// let mut output = Vec::with_capacity(text.len());

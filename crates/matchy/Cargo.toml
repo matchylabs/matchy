@@ -91,6 +91,7 @@ matchy-format = { path = "../matchy-format" }
 matchy-extractor = { path = "../matchy-extractor" }
 
 # Keep minimal initially - add as needed
+thiserror = "2.0"  # Error handling with automatic conversions
 libc = "0.2"
 memmap2 = "0.9.9"
 zerocopy = { version = "0.8.27", features = ["derive"] }  # Safe binary format access

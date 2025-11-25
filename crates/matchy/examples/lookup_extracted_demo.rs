@@ -7,8 +7,8 @@
 //! Run with:
 //!   cargo run --example lookup_extracted_demo
 
-use matchy::data_section::DataValue;
 use matchy::extractor::Extractor;
+use matchy::DataValue;
 use matchy::{Database, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 

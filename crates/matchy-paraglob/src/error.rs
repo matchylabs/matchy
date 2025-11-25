@@ -100,3 +100,6 @@ impl From<matchy_ip_trie::IpTreeError> for ParaglobError {
         }
     }
 }
+
+// Note: matchy-format dependency would create a circular dependency
+// This conversion is implemented in matchy crate which depends on both

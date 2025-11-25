@@ -8,12 +8,12 @@
 //! The database format is automatically detected and the appropriate
 //! lookup method is used transparently.
 
-use matchy_data_format::DataValue;
 use crate::literal_hash::LiteralHash;
 use crate::mmdb::{MmdbError, MmdbHeader, SearchTree};
-use matchy_paraglob::Paraglob;
 use arc_swap::ArcSwap;
 use lru::LruCache;
+use matchy_data_format::DataValue;
+use matchy_paraglob::Paraglob;
 use memmap2::Mmap;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -1841,7 +1841,7 @@ mod tests {
     #[test]
     fn test_reload_callback() {
         use crate::mmdb_builder::MmdbBuilder;
-        use crate::{MatchMode, DataValue};
+        use crate::{DataValue, MatchMode};
         use std::collections::HashMap;
         use std::fs;
         use std::sync::{Arc, Mutex};

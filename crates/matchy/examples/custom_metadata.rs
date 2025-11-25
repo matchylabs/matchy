@@ -2,8 +2,8 @@
 //!
 //! Shows how to set custom database_type and description fields
 
-use matchy::data_section::DataValue;
 use matchy::mmdb_builder::MmdbBuilder;
+use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

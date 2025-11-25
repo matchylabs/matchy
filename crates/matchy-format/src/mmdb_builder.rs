@@ -3,14 +3,14 @@
 //! Builds MMDB-format databases containing both IP address data and pattern matching data.
 //! Automatically detects whether input rows are IP addresses (including CIDRs) or patterns.
 
-use matchy_data_format::{DataEncoder, DataValue};
 use crate::error::FormatError;
-use matchy_match_mode::MatchMode;
+use crate::mmdb::types::RecordSize;
+use matchy_data_format::{DataEncoder, DataValue};
+use matchy_glob::GlobPattern;
 use matchy_ip_trie::IpTreeBuilder;
 use matchy_literal_hash::LiteralHashBuilder;
-use crate::mmdb::types::RecordSize;
+use matchy_match_mode::MatchMode;
 use matchy_paraglob::ParaglobBuilder;
-use matchy_glob::GlobPattern;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -73,8 +73,8 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy::mmdb_builder::MmdbBuilder;
-    /// use matchy::MatchMode;
+    /// use matchy_format::mmdb_builder::MmdbBuilder;
+    /// use matchy_match_mode::MatchMode;
     ///
     /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
     ///     .with_database_type("MyCompany-ThreatIntel");
@@ -91,8 +91,8 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy::mmdb_builder::MmdbBuilder;
-    /// use matchy::MatchMode;
+    /// use matchy_format::mmdb_builder::MmdbBuilder;
+    /// use matchy_match_mode::MatchMode;
     ///
     /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
     ///     .with_description("en", "My custom threat database")
@@ -134,7 +134,9 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy::{DatabaseBuilder, MatchMode, DataValue};
+    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_match_mode::MatchMode;
+    /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
     /// let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     /// let mut data = HashMap::new();
@@ -164,7 +166,9 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy::{DatabaseBuilder, MatchMode, DataValue};
+    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_match_mode::MatchMode;
+    /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
     /// let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     /// let mut data = HashMap::new();
@@ -219,7 +223,9 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy::{DatabaseBuilder, MatchMode, DataValue};
+    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_match_mode::MatchMode;
+    /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
     /// let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     /// let mut data = HashMap::new();
@@ -287,8 +293,8 @@ impl MmdbBuilder {
     ///
     /// # Examples
     /// ```
-    /// # use matchy::mmdb_builder::{MmdbBuilder, EntryType};
-    /// # use matchy::MatchMode;
+    /// # use matchy_format::mmdb_builder::{MmdbBuilder, EntryType};
+    /// # use matchy_match_mode::MatchMode;
     /// // Auto-detection
     /// assert!(matches!(MmdbBuilder::detect_entry_type("1.2.3.4"), Ok(EntryType::IpAddress { .. })));
     /// assert!(matches!(MmdbBuilder::detect_entry_type("*.example.com"), Ok(EntryType::Glob(_))));
@@ -308,8 +314,7 @@ impl MmdbBuilder {
         if let Some(stripped) = key.strip_prefix("glob:") {
             // Force glob matching - strip prefix and validate as glob
             // Use CaseSensitive for validation (mode doesn't matter for syntax checking)
-            if GlobPattern::new(stripped, MatchMode::CaseSensitive).is_ok()
-            {
+            if GlobPattern::new(stripped, MatchMode::CaseSensitive).is_ok() {
                 return Ok(EntryType::Glob(stripped.to_string()));
             }
             // If explicitly marked as glob but invalid syntax, return error

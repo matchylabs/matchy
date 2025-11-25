@@ -65,7 +65,7 @@ pub const MATCHY_FORMAT_VERSION_V1: u32 = 1;
 /// - v1 (72 bytes): Original format, patterns only
 /// - v2 (96 bytes): Adds data section support for pattern-associated data
 /// - v3 (104 bytes): Adds AC literal mapping for O(1) zero-copy loading
-/// - v4 (104 bytes): Uses ACNodeHot (16-byte) instead of ACNode (32-byte) - BREAKING
+/// - v4 (104 bytes): Uses ACNodeHot (20-byte) instead of ACNode (32-byte) - BREAKING
 /// - v5 (112 bytes): Adds serialized glob segments for zero-copy loading
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
@@ -172,193 +172,6 @@ pub struct ParaglobHeader {
 
     /// Total size of glob segment data (index + segment structures + string data)
     pub glob_segments_size: u32,
-}
-
-/// State encoding type for AC automaton nodes
-///
-/// Determines how transitions are stored and looked up for optimal performance.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StateKind {
-    /// No transitions (terminal state only)
-    Empty = 0,
-    /// Single transition - stored inline in node (75-80% of states)
-    One = 1,
-    /// 2-8 transitions - sparse edge array (10-15% of states)
-    Sparse = 2,
-    /// 9+ transitions - dense lookup table (2-5% of states)
-    Dense = 3,
-}
-
-impl StateKind {
-    /// Lookup table for fast u8 -> StateKind conversion
-    const LOOKUP: [Option<StateKind>; 256] = {
-        let mut table = [None; 256];
-        table[0] = Some(StateKind::Empty);
-        table[1] = Some(StateKind::One);
-        table[2] = Some(StateKind::Sparse);
-        table[3] = Some(StateKind::Dense);
-        table
-    };
-
-    /// Convert from u8 (for deserialization) - O(1) lookup
-    #[inline(always)]
-    pub const fn from_u8(value: u8) -> Option<Self> {
-        Self::LOOKUP[value as usize]
-    }
-}
-
-/// AC Automaton hot node data (16 bytes, 4-byte aligned)
-///
-/// Cache-optimized node structure containing only data accessed during matching.
-/// This allows 4 nodes per 64-byte cache line instead of 2, effectively doubling
-/// cache capacity for AC traversal.
-///
-/// # State Encoding
-///
-/// The node uses different encodings based on transition count:
-/// - **Empty** (0 transitions): No additional data needed
-/// - **One** (1 transition): Character and target stored inline (no indirection!)
-/// - **Sparse** (2-8 transitions): Offset to edge array, linear search
-/// - **Dense** (9+ transitions): Offset to 256-entry lookup table, O(1) access
-///
-/// # Field Ordering
-///
-/// Fields are ordered by access frequency (hot first) to maximize CPU pipeline efficiency:
-/// 1. `state_kind`, `one_char` - checked first on every transition
-/// 2. `edge_count`, `pattern_count` - determines next steps
-/// 3. Offsets - loaded speculatively while above checks execute
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct ACNodeHot {
-    /// State encoding type (StateKind enum) - HOT: checked every transition
-    pub state_kind: u8,
-
-    /// ONE encoding: character for single transition - HOT: used by 75-80% of states
-    pub one_char: u8,
-
-    /// Number of edges (SPARSE/DENSE states) - max 255 edges
-    pub edge_count: u8,
-
-    /// Number of pattern IDs at this node - max 255 patterns per node
-    pub pattern_count: u8,
-
-    /// SPARSE/DENSE/ONE encoding: offset-based lookup
-    /// - SPARSE: offset to ACEdge array
-    /// - DENSE: offset to DenseLookup table
-    /// - ONE: target offset for single transition
-    pub edges_offset: u32,
-
-    /// Offset to failure link node (0 = root)
-    pub failure_offset: u32,
-
-    /// Offset to pattern ID array
-    pub patterns_offset: u32,
-}
-// Total: 16 bytes (4 per cache line!)
-// state_kind(1) + one_char(1) + edge_count(1) + pattern_count(1) +
-// edges_offset(4) + failure_offset(4) + patterns_offset(4) = 16 bytes
-
-/// AC Automaton node (32 bytes, 8-byte aligned) - DEPRECATED
-///
-/// Legacy 32-byte node structure. Kept for backward compatibility with old file formats.
-/// New code should use ACNodeHot (16 bytes) for better cache performance.
-///
-/// Represents a single node in the Aho-Corasick trie with state-specific encoding.
-/// All child references are stored as offsets to allow zero-copy loading.
-///
-/// # State Encoding
-///
-/// The node uses different encodings based on transition count:
-/// - **Empty** (0 transitions): No additional data needed
-/// - **One** (1 transition): Character and target stored inline (no indirection!)
-/// - **Sparse** (2-8 transitions): Offset to edge array, linear search
-/// - **Dense** (9+ transitions): Offset to 256-entry lookup table, O(1) access
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct ACNode {
-    /// Unique node ID
-    pub node_id: u32,
-
-    /// Offset to failure link node (0 = root)
-    pub failure_offset: u32,
-
-    /// State encoding type (StateKind enum)
-    pub state_kind: u8,
-
-    /// Depth from root node
-    pub depth: u8,
-
-    /// Is this a terminal/final state? (1=yes, 0=no)
-    pub is_final: u8,
-
-    /// Reserved for future flags
-    pub reserved_flags: u8,
-
-    /// ONE encoding: character for single transition
-    pub one_char: u8,
-
-    /// Reserved for alignment
-    pub reserved_one: [u8; 3],
-
-    /// SPARSE/DENSE encoding: offset-based lookup (4 bytes)
-    /// - SPARSE: offset to ACEdge array
-    /// - DENSE: offset to DenseLookup table
-    /// - ONE: target offset for single transition
-    pub edges_offset: u32,
-
-    /// Number of edges (SPARSE/DENSE states only)
-    pub edge_count: u16,
-
-    /// Reserved for alignment
-    pub reserved_edge: u16,
-
-    /// Offset to pattern ID array
-    pub patterns_offset: u32,
-
-    /// Number of pattern IDs at this node
-    pub pattern_count: u16,
-
-    /// Reserved for alignment
-    pub reserved_pattern: u16,
-}
-// Total: node_id(4) + failure_offset(4) + state_kind/depth/is_final/reserved(4)
-//        + one_char/reserved_one(4) + edges_offset(4) + edge_count/reserved(4)
-//        + patterns_offset(4) + pattern_count/reserved(4)
-//        = 4+4+4+4+4+4+4+4 = 32 bytes ✓
-
-/// AC Automaton edge (8 bytes, 4-byte aligned)
-///
-/// Represents a transition from one node to another on a specific character.
-/// Used by SPARSE state encoding.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct ACEdge {
-    /// Input character (0-255)
-    pub character: u8,
-
-    /// Reserved for alignment
-    pub reserved: [u8; 3],
-
-    /// Offset to target node
-    pub target_offset: u32,
-}
-
-/// Dense lookup table for states with many transitions (1024 bytes, 64-byte aligned)
-///
-/// Used by DENSE state encoding for O(1) transition lookup.
-/// Each entry is a target node offset (0 = no transition).
-///
-/// **Cache-line alignment**: The 64-byte alignment ensures this structure starts on a
-/// cache line boundary, preventing cache line splits and improving memory access performance
-/// by 5-15% for dense state lookups. The structure size remains 1024 bytes; only the
-/// placement in memory changes (average 32 bytes padding per instance).
-#[repr(C, align(64))]
-#[derive(Debug, Clone, Copy)]
-pub struct DenseLookup {
-    /// Target offsets indexed by character (0-255)
-    /// 0 means no transition for that character
-    pub targets: [u32; 256],
 }
 
 /// Pattern entry (16 bytes, 8-byte aligned)
@@ -507,11 +320,6 @@ pub struct CharClassItemEncoded {
 
 // Compile-time size assertions to ensure struct layout
 const _: () = assert!(mem::size_of::<ParaglobHeader>() == 112); // v5: 8-byte magic + 26 * u32 fields
-const _: () = assert!(mem::size_of::<ACNodeHot>() == 16); // Cache-optimized: 4 per cache line
-const _: () = assert!(mem::size_of::<ACNode>() == 32); // Legacy: 2 per cache line
-const _: () = assert!(mem::size_of::<ACEdge>() == 8);
-const _: () = assert!(mem::size_of::<DenseLookup>() == 1024); // 256 * 4 bytes
-const _: () = assert!(mem::align_of::<DenseLookup>() == 64); // Cache-line alignment for performance
 const _: () = assert!(mem::size_of::<PatternEntry>() == 16);
 const _: () = assert!(mem::size_of::<MetaWordMapping>() == 12);
 const _: () = assert!(mem::size_of::<SingleWildcard>() == 8);
@@ -540,8 +348,6 @@ impl PatternDataMapping {
 impl ParaglobHeader {
     /// Create a new v3 header with magic and version
     pub fn new() -> Self {
-        use crate::endian::EndiannessMarker;
-
         Self {
             magic: *MAGIC,
             version: MATCHY_FORMAT_VERSION,
@@ -559,7 +365,7 @@ impl ParaglobHeader {
             pattern_refs_size: 0,
             wildcard_count: 0,
             total_buffer_size: 0,
-            endianness: EndiannessMarker::LittleEndian as u8,
+            endianness: 0x01, // Little-endian marker (reserved for future use)
             reserved: [0; 3],
             // v2 fields
             data_section_offset: 0,
@@ -615,14 +421,8 @@ impl ParaglobHeader {
             }
         }
 
-        // Validate AC nodes section
-        if self.ac_node_count > 0 {
-            let offset = self.ac_nodes_offset as usize;
-            let size = (self.ac_node_count as usize) * mem::size_of::<ACNode>();
-            if offset.checked_add(size).is_none_or(|end| end > buffer_len) {
-                return Err("AC nodes section out of bounds");
-            }
-        }
+        // TODO: Paraglob section should validate its own internal structures
+        // matchy-format shouldn't know about AC nodes - that's a paraglob implementation detail
 
         // Validate patterns section
         if self.pattern_count > 0 {
@@ -672,56 +472,6 @@ impl ParaglobHeader {
     /// Check if this file has pre-built glob segments (v5+)
     pub fn has_glob_segments(&self) -> bool {
         self.glob_segments_size > 0 && self.glob_segments_offset > 0
-    }
-
-    /// Get the endianness marker from the header
-    pub fn get_endianness(&self) -> crate::endian::EndiannessMarker {
-        use crate::endian::EndiannessMarker;
-
-        match self.endianness {
-            0x01 => EndiannessMarker::LittleEndian,
-            0x02 => EndiannessMarker::BigEndian,
-            _ => EndiannessMarker::LittleEndian, // Legacy files without endianness marker
-        }
-    }
-
-    /// Check if byte swapping is needed when reading this database
-    pub fn needs_byte_swap(&self) -> bool {
-        self.get_endianness().needs_swap()
-    }
-}
-
-impl ACNode {
-    /// Create a new node with default EMPTY encoding
-    #[allow(dead_code)]
-    pub fn new(node_id: u32, depth: u8) -> Self {
-        Self {
-            node_id,
-            failure_offset: 0,
-            state_kind: StateKind::Empty as u8,
-            depth,
-            is_final: 0,
-            reserved_flags: 0,
-            one_char: 0,
-            reserved_one: [0; 3],
-            edges_offset: 0,
-            edge_count: 0,
-            reserved_edge: 0,
-            patterns_offset: 0,
-            pattern_count: 0,
-            reserved_pattern: 0,
-        }
-    }
-}
-
-impl ACEdge {
-    /// Create a new edge
-    pub fn new(character: u8, target_offset: u32) -> Self {
-        Self {
-            character,
-            reserved: [0; 3],
-            target_offset,
-        }
     }
 }
 
@@ -873,18 +623,6 @@ mod tests {
     fn test_header_size() {
         assert_eq!(mem::size_of::<ParaglobHeader>(), 112); // v5: 8-byte magic + 26 * u32
         assert_eq!(mem::align_of::<ParaglobHeader>(), 4);
-    }
-
-    #[test]
-    fn test_node_size() {
-        assert_eq!(mem::size_of::<ACNode>(), 32);
-        assert_eq!(mem::align_of::<ACNode>(), 4);
-    }
-
-    #[test]
-    fn test_edge_size() {
-        assert_eq!(mem::size_of::<ACEdge>(), 8);
-        assert_eq!(mem::align_of::<ACEdge>(), 4);
     }
 
     #[test]
