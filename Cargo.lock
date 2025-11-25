@@ -769,8 +769,10 @@ dependencies = [
  "matchy-ac",
  "matchy-data-format",
  "matchy-extractor",
+ "matchy-format",
  "matchy-glob",
  "matchy-ip-trie",
+ "matchy-literal-hash",
  "matchy-match-mode",
  "matchy-paraglob",
  "memchr",
@@ -822,6 +824,24 @@ dependencies = [
 [[package]]
 name = "matchy-format"
 version = "1.2.2"
+dependencies = [
+ "anyhow",
+ "libc",
+ "matchy-data-format",
+ "matchy-glob",
+ "matchy-ip-trie",
+ "matchy-literal-hash",
+ "matchy-match-mode",
+ "matchy-paraglob",
+ "memmap2",
+ "rayon",
+ "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "xxhash-rust",
+ "zerocopy",
+]
 
 [[package]]
 name = "matchy-glob"
@@ -833,6 +853,16 @@ dependencies = [
 [[package]]
 name = "matchy-ip-trie"
 version = "1.2.2"
+
+[[package]]
+name = "matchy-literal-hash"
+version = "1.2.2"
+dependencies = [
+ "matchy-match-mode",
+ "rayon",
+ "rustc-hash 2.1.1",
+ "xxhash-rust",
+]
 
 [[package]]
 name = "matchy-match-mode"

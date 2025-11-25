@@ -86,22 +86,10 @@
 
 // Module declarations
 
-// Internal modules (implementation details)
-mod ac_literal_hash;
-mod offset_format;
-mod paraglob_offset;
-
-// Use extracted workspace crates
-use matchy_glob as glob;
-use matchy_ac as ac_offset;
-use matchy_ip_trie as ip_tree_builder;
-use matchy_data_format as data_section;
 
 // Public modules (documented API)
 /// Unified database API
 pub mod database;
-/// Endianness handling for cross-platform zero-copy support
-pub mod endian;
 /// Error types for Paraglob operations
 pub mod error;
 /// Fast extraction of structured patterns (domains, IPs, emails) from text
@@ -110,15 +98,22 @@ pub mod error;
 pub use matchy_extractor as extractor;
 /// File reading utilities with automatic gzip decompression
 pub mod file_reader;
-/// Literal string hash table for O(1) exact matching
-pub mod literal_hash;
 /// MISP JSON threat intelligence importer
 pub mod misp_importer;
-pub mod mmap;
+
+// Re-export format modules from matchy-format
+/// Endianness handling for cross-platform zero-copy support
+pub use matchy_format::endian;
+/// Literal string hash table for O(1) exact matching
+pub use matchy_literal_hash as literal_hash;
+/// Memory-mapped file handling
+pub use matchy_format::mmap;
 /// MMDB format implementation (internal)
-mod mmdb;
+use matchy_format::mmdb;
 /// Unified MMDB builder
-pub mod mmdb_builder;
+pub use matchy_format::mmdb_builder;
+/// Offset format structures
+pub use matchy_format::offset_format;
 
 /// Batch processing infrastructure for efficient file analysis
 ///
@@ -154,7 +149,7 @@ pub mod c_api;
 #[cfg(feature = "bench-internal")]
 #[doc(hidden)]
 pub mod bench_api {
-    pub use crate::paraglob_offset::{Paraglob, ParaglobBuilder};
+    pub use matchy_paraglob::{Paraglob, ParaglobBuilder};
 }
 
 // Re-exports for Rust consumers
@@ -165,7 +160,7 @@ pub use crate::database::{
 };
 
 /// Data value type for database entries
-pub use crate::data_section::DataValue;
+pub use matchy_data_format::DataValue;
 
 pub use crate::error::ParaglobError;
 pub use matchy_match_mode::MatchMode;
@@ -197,14 +192,14 @@ pub use matchy_match_mode::MatchMode;
 /// let db_bytes = builder.build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub use crate::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+pub use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
 
 /// Entry type classification for database builder
 ///
 /// Represents whether an entry should be treated as an IP address, literal string,
 /// or glob pattern. Used with [`DatabaseBuilder::detect_entry_type`] for explicit
 /// type control.
-pub use crate::mmdb_builder::EntryType;
+pub use matchy_format::mmdb_builder::EntryType;
 
 // Version information
 /// Library version string

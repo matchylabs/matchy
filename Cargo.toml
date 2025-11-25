@@ -7,6 +7,7 @@ members = [
     "crates/matchy-paraglob",
     "crates/matchy-ip-trie",
     "crates/matchy-data-format",
+    "crates/matchy-literal-hash",
     "crates/matchy-format",
     "crates/matchy-extractor",
 ]

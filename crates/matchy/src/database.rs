@@ -8,10 +8,10 @@
 //! The database format is automatically detected and the appropriate
 //! lookup method is used transparently.
 
-use crate::data_section::DataValue;
+use matchy_data_format::DataValue;
 use crate::literal_hash::LiteralHash;
 use crate::mmdb::{MmdbError, MmdbHeader, SearchTree};
-use crate::paraglob_offset::Paraglob;
+use matchy_paraglob::Paraglob;
 use arc_swap::ArcSwap;
 use lru::LruCache;
 use memmap2::Mmap;
@@ -691,17 +691,17 @@ impl Database {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn mode(&self) -> crate::glob::MatchMode {
+    pub fn mode(&self) -> matchy_glob::MatchMode {
         // If there's a pattern matcher, use its mode
         if let Some(ref pm) = self.pattern_matcher {
-            return pm.mode;
+            return pm.mode();
         }
         // If there's a literal hash, use its mode
         if let Some(ref lh) = self.literal_hash {
             return lh.mode();
         }
         // Default to case-sensitive for IP-only databases
-        crate::glob::MatchMode::CaseSensitive
+        matchy_glob::MatchMode::CaseSensitive
     }
 
     /// Open database with custom options (lower-level API)
@@ -1149,7 +1149,7 @@ impl Database {
     /// Decode IP data at a given offset
     /// Decode IP data at a given offset
     fn decode_ip_data(&self, header: &MmdbHeader, offset: u32) -> Result<DataValue, DatabaseError> {
-        use crate::data_section::DataDecoder;
+        use matchy_data_format::DataDecoder;
 
         // Offsets from the tree are relative to the start of the data section (after the 16-byte separator)
         // So we slice the buffer to start at tree_size + 16
@@ -1532,8 +1532,8 @@ impl Database {
 
     /// Read match mode from database metadata
     /// Returns CaseSensitive as default if not found or on error
-    fn read_match_mode_from_metadata(data: &[u8]) -> crate::glob::MatchMode {
-        use crate::glob::MatchMode;
+    fn read_match_mode_from_metadata(data: &[u8]) -> matchy_glob::MatchMode {
+        use matchy_glob::MatchMode;
 
         // Try to read metadata
         if let Ok(metadata) = crate::mmdb::MmdbMetadata::from_file(data) {
@@ -1841,7 +1841,7 @@ mod tests {
     #[test]
     fn test_reload_callback() {
         use crate::mmdb_builder::MmdbBuilder;
-        use crate::{glob::MatchMode, DataValue};
+        use crate::{MatchMode, DataValue};
         use std::collections::HashMap;
         use std::fs;
         use std::sync::{Arc, Mutex};

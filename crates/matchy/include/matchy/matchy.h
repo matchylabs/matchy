@@ -41,41 +41,6 @@ namespace matchy {
 #endif  // __cplusplus
 
 /*
- Current version of the AC literal hash format
- */
-#define MATCHY_AC_LITERAL_HASH_VERSION 1
-
-/*
- Current format version (v5: serialized glob segments for zero-copy loading)
- */
-#define MATCHY_FORMAT_VERSION 5
-
-/*
- Previous format version (v4: uses ACNodeHot for 50% memory reduction)
- */
-#define MATCHY_FORMAT_VERSION_V4 4
-
-/*
- Previous format version (v3: adds AC literal mapping for zero-copy loading)
- */
-#define MATCHY_FORMAT_VERSION_V3 3
-
-/*
- Previous format version (v2: adds data section support)
- */
-#define MATCHY_FORMAT_VERSION_V2 2
-
-/*
- Previous format version (v1: patterns only, no data)
- */
-#define MATCHY_FORMAT_VERSION_V1 1
-
-/*
- Current version of the literal hash format
- */
-#define MATCHY_LITERAL_HASH_VERSION 1
-
-/*
  Success code
  */
 #define MATCHY_SUCCESS 0

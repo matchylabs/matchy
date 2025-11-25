@@ -50,9 +50,9 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-use crate::data_section::DataValue;
+use matchy_data_format::DataValue;
 use crate::error::ParaglobError;
-use crate::glob::MatchMode;
+use matchy_glob::MatchMode;
 use crate::mmdb_builder::MmdbBuilder;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;

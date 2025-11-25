@@ -1,0 +1,14 @@
+[package]
+name = "matchy-literal-hash"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false  # Internal for now
+
+[dependencies]
+matchy-match-mode = { path = "../matchy-match-mode" }
+rayon = { workspace = true }
+rustc-hash = { workspace = true }
+xxhash-rust = { workspace = true }

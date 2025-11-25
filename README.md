@@ -156,6 +156,23 @@ MaxMind-compatible API also available. See **[The Matchy Book](https://sethhall.
 - **[API Reference](https://docs.rs/matchy)** - Rust library documentation  
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture and performance details
 
+## Workspace Structure
+
+Matchy is organized as a Cargo workspace with focused, reusable crates:
+
+- **matchy** - Main crate with CLI, Database API, C FFI
+- **matchy-format** - Unified .mxy file format (orchestrates all components)
+- **matchy-paraglob** - Glob pattern matching engine
+- **matchy-literal-hash** - O(1) exact string matching
+- **matchy-ip-trie** - IP address/CIDR routing
+- **matchy-ac** - Aho-Corasick automaton
+- **matchy-glob** - Glob pattern parser and matcher
+- **matchy-data-format** - MMDB data encoding/decoding
+- **matchy-extractor** - IoC extraction from unstructured text
+- **matchy-match-mode** - Shared case-sensitivity enum
+
+Each crate has its own README with usage examples and architecture details.
+
 ## Project Info
 
 **License**: BSD-2-Clause  

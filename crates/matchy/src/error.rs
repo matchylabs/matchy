@@ -100,3 +100,17 @@ impl From<matchy_ip_trie::IpTreeError> for ParaglobError {
         }
     }
 }
+
+impl From<matchy_format::FormatError> for ParaglobError {
+    fn from(err: matchy_format::FormatError) -> Self {
+        match err {
+            matchy_format::FormatError::InvalidIpAddress(msg) 
+            | matchy_format::FormatError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
+            matchy_format::FormatError::IoError(msg) => ParaglobError::Io(msg),
+            matchy_format::FormatError::IpTreeError(msg)
+            | matchy_format::FormatError::PatternError(msg)
+            | matchy_format::FormatError::LiteralHashError(msg)
+            | matchy_format::FormatError::Other(msg) => ParaglobError::Other(msg),
+        }
+    }
+}

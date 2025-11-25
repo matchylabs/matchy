@@ -1,14 +1,22 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Matchy Database File Format
+//!
+//! This crate provides the binary format for matchy databases, combining:
+//! - IP trie (from matchy-ip-trie)
+//! - Pattern matching (from matchy-paraglob)
+//! - Data section (from matchy-data-format)
+//!
+//! The format orchestrates all three components into a unified .mxy file.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// Public modules
+pub mod endian;
+pub mod error;
+pub mod mmap;
+pub mod mmdb;
+pub mod mmdb_builder;
+pub mod offset_format;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// Re-exports for convenience
+pub use error::FormatError;
+pub use mmdb_builder::MmdbBuilder;
+pub use offset_format::*;
+pub use matchy_literal_hash;

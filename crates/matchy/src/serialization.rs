@@ -5,8 +5,8 @@
 //! memory across processes.
 
 use crate::error::ParaglobError;
-use crate::glob::MatchMode as GlobMatchMode;
-use crate::paraglob_offset::Paraglob;
+use matchy_glob::MatchMode as GlobMatchMode;
+use matchy_paraglob::Paraglob;
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::Write;

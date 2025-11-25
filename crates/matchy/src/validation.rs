@@ -831,7 +831,7 @@ fn validate_data_section_utf8(
 /// Check UTF-8 validity of all strings in a data value
 /// Returns count of strings checked, or error if invalid UTF-8 found
 fn check_data_value_utf8(data_section: &[u8], offset: usize) -> std::result::Result<u32, String> {
-    use crate::data_section::DataDecoder;
+    use matchy_data_format::DataDecoder;
 
     let decoder = DataDecoder::new(data_section, 0);
 

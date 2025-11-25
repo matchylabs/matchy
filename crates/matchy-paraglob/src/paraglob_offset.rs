@@ -968,6 +968,11 @@ impl Paraglob {
         }
     }
 
+    /// Get the match mode
+    pub fn mode(&self) -> GlobMatchMode {
+        self.mode
+    }
+
     /// Build Paraglob from patterns
     #[cfg(any(test, feature = "bench-internal"))]
     pub fn build_from_patterns(

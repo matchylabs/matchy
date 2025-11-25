@@ -9,7 +9,7 @@ pub(crate) mod literal_hash;
 
 // Temporary modules until Phase 8 (will be extracted to matchy-format)
 pub(crate) mod endian;
-pub(crate) mod error;
+pub mod error;  // Public so matchy-format can use ParaglobError
 pub(crate) mod offset_format;
 pub(crate) mod simd_utils;
 
