@@ -15,7 +15,7 @@ This ensures domains work whether they appear in logs as UTF-8 ("公司.cn") or 
 ## Usage
 
 ```bash
-cd tools/update-psl
+cd crates/matchy-extractor/tools/update-psl
 cargo run
 ```
 
@@ -37,8 +37,8 @@ Total unique entries: 11490
 ✓ Saved to ../../src/data/public_suffix_list.dat
 
 Next steps:
-  1. cargo test    # Verify everything works
-  2. git add ../../src/data/public_suffix_list.dat
+  1. cd ../../.. && cargo test -p matchy-extractor    # Verify everything works
+  2. git add src/data/public_suffix_list.dat
   3. git commit -m "Update Public Suffix List with punycode"
 ```
 

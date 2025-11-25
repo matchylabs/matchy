@@ -3,6 +3,9 @@ name = "update-psl"
 version = "0.1.0"
 edition = "2021"
 
+# Standalone tool - not part of matchy workspace
+[workspace]
+
 [dependencies]
 idna = "1.0"
 ureq = "2.10"
