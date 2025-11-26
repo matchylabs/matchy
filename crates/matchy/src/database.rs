@@ -900,7 +900,18 @@ impl Database {
             }
 
             // Use thread-local cached Arc (zero atomic operations!)
-            return LOCAL_DB.with(|local_db| local_db.borrow().as_ref().unwrap().lookup(query));
+            // Safety: LOCAL_DB is guaranteed to be initialized here because:
+            // - LOCAL_GENERATION starts at 0, watcher.generation starts at 1
+            // - On first call, needs_refresh is always true, initializing LOCAL_DB
+            return LOCAL_DB.with(|local_db| {
+                local_db
+                    .borrow()
+                    .as_ref()
+                    .expect(
+                        "LOCAL_DB not initialized: generation check should have triggered refresh",
+                    )
+                    .lookup(query)
+            });
         }
 
         // No watching - proceed with normal lookup
@@ -1092,18 +1103,27 @@ impl Database {
             for &pattern_id in &glob_pattern_ids {
                 // For combined databases, use mappings to decode from MMDB data section
                 // For pattern-only databases, use Paraglob's internal data cache
-                let data = if let Some(mappings) = &self.pattern_data_mappings {
-                    // Combined database: decode from MMDB data section using lazy lookup
-                    if let Some(data_offset) = mappings.get_offset(pattern_id, self.data.as_slice())
-                    {
-                        let header = self.ip_header.as_ref().unwrap();
-                        Some(self.decode_ip_data(header, data_offset)?)
-                    } else {
-                        None
+                let data = match (&self.pattern_data_mappings, &self.ip_header) {
+                    (Some(mappings), Some(header)) => {
+                        // Combined database: decode from MMDB data section using lazy lookup
+                        if let Some(data_offset) =
+                            mappings.get_offset(pattern_id, self.data.as_slice())
+                        {
+                            Some(self.decode_ip_data(header, data_offset)?)
+                        } else {
+                            None
+                        }
                     }
-                } else {
-                    // Pattern-only database: use Paraglob's lazy data lookup
-                    pg.get_pattern_data(pattern_id)
+                    (Some(_), None) => {
+                        // Invalid state: pattern_data_mappings requires ip_header to be set
+                        unreachable!(
+                            "pattern_data_mappings present without ip_header - invalid database state"
+                        )
+                    }
+                    (None, _) => {
+                        // Pattern-only database: use Paraglob's lazy data lookup
+                        pg.get_pattern_data(pattern_id)
+                    }
                 };
                 all_pattern_ids.push(pattern_id);
                 all_data_values.push(data);

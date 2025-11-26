@@ -109,6 +109,7 @@ tiny-keccak = { version = "2.0", features = ["keccak"] }  # Keccak256 for Ethere
 bech32 = "0.11"  # Bech32 encoding for Bitcoin SegWit addresses
 notify = "8.2"  # File watching for database auto-reload
 arc-swap = "1.7"  # Lock-free Arc swapping for zero-overhead database reloading
+crossbeam-channel = "0.5"  # Lock-free MPMC channels for parallel processing
 
 # CLI-only dependencies (optional)
 clap = { version = "4.5", features = ["derive", "cargo"], optional = true }

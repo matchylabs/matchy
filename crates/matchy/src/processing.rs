@@ -42,11 +42,11 @@
 
 use crate::extractor::{ExtractedItem, Extractor, HashType};
 use crate::{Database, QueryResult};
+use crossbeam_channel::{unbounded, Sender};
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1088,11 +1088,9 @@ where
     // Two-queue architecture for dynamic work distribution:
     // 1. file_queue: Files that need chunking (readers pull from here)
     // 2. work_queue: Work units ready to process (workers pull from here)
-    let (file_sender, file_receiver) = channel::<PathBuf>();
-    let file_receiver = Arc::new(Mutex::new(file_receiver));
-
-    let (work_sender, work_receiver) = channel::<WorkUnit>();
-    let work_receiver = Arc::new(Mutex::new(work_receiver));
+    // Using crossbeam-channel for lock-free MPMC (receivers are clonable)
+    let (file_sender, file_receiver) = unbounded::<PathBuf>();
+    let (work_sender, work_receiver) = unbounded::<WorkUnit>();
 
     // Wrap factory and progress callback in Arc for sharing across threads
     let worker_factory = Arc::new(create_worker);
@@ -1110,20 +1108,15 @@ where
     let mut reader_handles = Vec::new();
     if num_readers > 0 {
         for _reader_id in 0..num_readers {
-            let file_rx = Arc::clone(&file_receiver);
+            let file_rx = file_receiver.clone();
             let work_tx = work_sender.clone();
             let state = Arc::clone(&system_state);
 
             let handle = thread::spawn(move || {
                 // Pull files from queue and chunk them
-                loop {
-                    let file_path = match file_rx.lock().unwrap().recv() {
-                        Ok(path) => {
-                            state.dec_reader_queue(); // File removed from queue
-                            path
-                        }
-                        Err(_) => break, // File queue closed
-                    };
+                // crossbeam-channel receivers are clonable, no mutex needed
+                while let Ok(file_path) = file_rx.recv() {
+                    state.dec_reader_queue(); // File removed from queue
 
                     // Chunk this file and send chunks to work queue
                     if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
@@ -1141,7 +1134,7 @@ where
     // Workers pull work units from work_queue and process them
     let mut worker_handles = Vec::new();
     for worker_id in 0..num_workers {
-        let receiver = Arc::clone(&work_receiver);
+        let receiver = work_receiver.clone();
         let factory = Arc::clone(&worker_factory);
         let state = Arc::clone(&system_state);
 
@@ -1163,14 +1156,9 @@ where
             let progress_interval = std::time::Duration::from_millis(100);
 
             // Process work units until channel closes
-            loop {
-                let unit = match receiver.lock().unwrap().recv() {
-                    Ok(u) => {
-                        state.dec_worker_queue(); // Work unit removed from queue
-                        u
-                    }
-                    Err(_) => break, // Channel closed
-                };
+            // crossbeam-channel receivers are clonable, no mutex needed
+            while let Ok(unit) = receiver.recv() {
+                state.dec_worker_queue(); // Work unit removed from queue
 
                 match process_work_unit_with_worker(&unit, &mut worker) {
                     Ok(matches) => {

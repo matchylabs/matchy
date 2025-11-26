@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -295,13 +296,13 @@ pub fn follow_files_parallel(
     );
 
     // Create channels for pipeline
+    // Using crossbeam-channel for lock-free MPMC (receivers are clonable)
     let work_queue_capacity = num_threads * 4;
     let result_queue_capacity = 1000;
 
-    let (work_tx, work_rx) =
-        mpsc::sync_channel::<Option<super::parallel::DataBatch>>(work_queue_capacity);
+    let (work_tx, work_rx) = bounded::<Option<super::parallel::DataBatch>>(work_queue_capacity);
     let (result_tx, result_rx) =
-        mpsc::sync_channel::<Option<super::parallel::WorkerMessage>>(result_queue_capacity);
+        bounded::<Option<super::parallel::WorkerMessage>>(result_queue_capacity);
 
     // Spawn output thread - just use the existing parallel one
     let shutdown_output = Arc::clone(&shutdown);
@@ -318,13 +319,11 @@ pub fn follow_files_parallel(
         })
     };
 
-    // Share work receiver across workers
-    let work_rx = Arc::new(Mutex::new(work_rx));
-
     // Spawn worker pool - same as parallel but checks shutdown signal
+    // crossbeam-channel receivers are clonable, no mutex needed
     let mut worker_handles = Vec::new();
     for worker_id in 0..num_threads {
-        let work_rx = Arc::clone(&work_rx);
+        let work_rx = work_rx.clone();
         let result_tx = result_tx.clone();
         let db_clone = Arc::clone(&db); // Clone the Arc, not the Database
         let extractor_config = extractor_config.clone();
@@ -392,7 +391,7 @@ pub fn follow_files_parallel(
 /// Reader/watcher thread: watches files, reads new content, batches and sends to workers
 fn reader_watcher_thread(
     inputs: Vec<PathBuf>,
-    work_tx: SyncSender<Option<super::parallel::DataBatch>>,
+    work_tx: Sender<Option<super::parallel::DataBatch>>,
     _overall_start: Instant,
     shutdown: Arc<AtomicBool>,
     show_stats: bool,
@@ -470,8 +469,8 @@ fn reader_watcher_thread(
 /// Worker thread for follow mode - same as parallel but can be interrupted
 fn worker_thread_follow(
     worker_id: usize,
-    work_rx: Arc<Mutex<Receiver<Option<super::parallel::DataBatch>>>>,
-    result_tx: SyncSender<Option<super::parallel::WorkerMessage>>,
+    work_rx: Receiver<Option<super::parallel::DataBatch>>,
+    result_tx: Sender<Option<super::parallel::WorkerMessage>>,
     db: Arc<matchy::Database>, // Receive shared Database wrapped in Arc
     _show_stats: bool,
     extractor_config: super::parallel::ExtractorConfig,
@@ -504,11 +503,9 @@ fn worker_thread_follow(
     let mut match_buffers = MatchBuffers::new();
 
     // Process work batches
+    // crossbeam-channel receivers are clonable, no mutex needed
     loop {
-        let batch_opt = {
-            let rx = work_rx.lock().unwrap();
-            rx.recv()
-        };
+        let batch_opt = work_rx.recv();
 
         match batch_opt {
             Ok(Some(batch)) => {
@@ -555,7 +552,7 @@ fn worker_thread_follow(
 
 /// Output thread for follow mode - includes shutdown signal awareness
 fn output_thread_follow(
-    result_rx: Receiver<Option<super::parallel::WorkerMessage>>,
+    result_rx: crossbeam_channel::Receiver<Option<super::parallel::WorkerMessage>>,
     output_json: bool,
     show_progress: bool,
     overall_start: Instant,
@@ -563,7 +560,6 @@ fn output_thread_follow(
 ) -> ProcessingStats {
     use super::parallel::WorkerMessage;
     use serde_json::json;
-    use std::sync::atomic::Ordering;
 
     let mut stats = ProcessingStats::new();
     let mut worker_stats_map: HashMap<usize, super::parallel::WorkerStats> = HashMap::new();
@@ -647,11 +643,11 @@ fn output_thread_follow(
                 // Channel closed normally (all workers finished)
                 break;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 // Normal timeout - continue loop to check shutdown again
                 continue;
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 // Channel disconnected - all workers done
                 break;
             }
@@ -670,7 +666,7 @@ fn output_thread_follow(
 fn handle_file_event_parallel(
     event: Event,
     file_positions: &mut HashMap<PathBuf, u64>,
-    work_tx: &SyncSender<Option<super::parallel::DataBatch>>,
+    work_tx: &Sender<Option<super::parallel::DataBatch>>,
 ) -> Result<()> {
     match event.kind {
         EventKind::Modify(_) | EventKind::Create(_) => {
