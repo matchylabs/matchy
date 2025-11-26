@@ -80,12 +80,36 @@ mkdir -p target
 ln -s ../benchmarks/criterion_data target/criterion
 ```
 
+## Benchmark Organization
+
+### Workspace Benchmarks
+
+Benchmarks are organized by component:
+
+**Subcrate Benchmarks** (test individual components):
+- `matchy-paraglob` - Core pattern matching engine
+  - `cargo bench -p matchy-paraglob`
+  - Tests build, match, serialization, load performance
+- `matchy-extractor` - Text extraction (domains, IPs, emails)
+  - `cargo bench -p matchy-extractor`
+  - Tests extraction performance
+
+**Unified Database Benchmarks** (test integration features):
+- `matchy` - Complete database system
+  - `cargo bench -p matchy`
+  - Tests caching, MMDB format, batch processing, hot-reload
+
+**Run all workspace benchmarks**:
+```bash
+cargo bench  # Runs benchmarks in all crates
+```
+
 ## Key Metrics
 
 ### Match Performance (Most Important)
 - **What**: Throughput of pattern matching in MB/s
 - **Target**: 30-50% improvement from state encoding optimization
-- **Command**: `cargo bench --bench matchy_bench match`
+- **Command**: `cargo bench -p matchy-paraglob` (component) or `cargo bench -p matchy` (integration)
 
 ### Load Performance (Critical to Preserve)
 - **What**: Time to mmap and initialize database

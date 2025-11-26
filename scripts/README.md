@@ -9,6 +9,8 @@ Utility scripts for the matchy project.
 
 These scripts help capture, compare, and analyze performance benchmarks using Criterion.
 
+**Note**: Benchmarks are distributed across subcrates (`matchy-paraglob`, `matchy-extractor`) and the main `matchy` crate. The scripts automatically discover and run all workspace benchmarks via `cargo bench`.
+
 ### benchmark_baseline.sh
 
 Captures a performance baseline for future comparisons. Creates timestamped backups and optionally tags the commit.

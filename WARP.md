@@ -93,14 +93,18 @@ cargo clippy -- -W clippy::all -W clippy::pedantic
 ### Performance
 
 ```bash
-# Run benchmarks
+# Run all workspace benchmarks
 cargo bench
 
-# Run specific benchmark
-cargo bench pattern_matching
+# Run subcrate benchmarks
+cargo bench -p matchy-paraglob
+cargo bench -p matchy-extractor
+
+# Run matchy (integration) benchmarks
+cargo bench -p matchy
 
 # Memory profiling (allocation analysis)
-cargo bench --bench query_profile --features dhat-heap
+cargo bench -p matchy --bench query_profile --features dhat-heap
 
 # Run examples (includes perf test)
 cargo run --release --example production_test
@@ -182,8 +186,18 @@ matchy/
 ├── tests/
 │   └── integration_tests.rs  # End-to-end integration tests
 ├── benches/
-│   ├── matchy_bench.rs       # Criterion benchmarks
-│   └── query_profile.rs      # Memory allocation profiling (dhat)
+│   ├── cache_bench.rs           # Caching performance (integration)
+│   ├── reload_overhead_bench.rs # Hot reload overhead (integration)
+│   ├── mmdb_build_bench.rs      # MMDB builder perf (integration)
+│   ├── batch_bench.rs           # Batch processing perf (integration)
+│   └── query_profile.rs         # Memory allocation profiling (dhat)
+├── crates/
+│   ├── matchy-paraglob/
+│   │   └── benches/
+│   │       └── paraglob_bench.rs   # Core pattern matching perf
+│   └── matchy-extractor/
+│       └── benches/
+│           └── extraction_bench.rs # Text extraction perf
 ├── examples/
 │   ├── glob_demo.rs          # Basic glob pattern demonstrations
 │   └── production_test.rs    # Production workload simulation

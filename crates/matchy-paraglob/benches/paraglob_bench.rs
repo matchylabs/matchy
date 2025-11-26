@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::bench_api::Paraglob;
-use matchy::serialization::{load, save};
-use matchy::MatchMode;
+use matchy_match_mode::MatchMode;
+use matchy_paraglob::Paraglob;
+use std::fs;
 use std::hint::black_box;
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -161,7 +161,8 @@ fn bench_serialization(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("save", count), &pg, |b, pg| {
             b.iter(|| {
                 let temp_file = NamedTempFile::new().unwrap();
-                save(black_box(pg), temp_file.path()).unwrap();
+                let buffer = black_box(pg.buffer());
+                fs::write(temp_file.path(), buffer).unwrap();
                 black_box(temp_file);
             });
         });
@@ -183,17 +184,18 @@ fn bench_load(c: &mut Criterion) {
 
         // Create a temp file
         let temp_file = NamedTempFile::new().unwrap();
-        save(&pg, temp_file.path()).unwrap();
+        fs::write(temp_file.path(), pg.buffer()).unwrap();
 
-        let file_size = std::fs::metadata(temp_file.path()).unwrap().len();
+        let file_size = fs::metadata(temp_file.path()).unwrap().len();
 
         group.throughput(Throughput::Bytes(file_size));
         group.bench_with_input(
-            BenchmarkId::new("mmap_load", count),
+            BenchmarkId::new("buffer_load", count),
             temp_file.path(),
             |b, path| {
                 b.iter(|| {
-                    let loaded = load(black_box(path), MatchMode::CaseSensitive).unwrap();
+                    let buffer = fs::read(black_box(path)).unwrap();
+                    let loaded = Paraglob::from_buffer(buffer, MatchMode::CaseSensitive).unwrap();
                     black_box(loaded);
                 });
             },
@@ -223,9 +225,9 @@ fn bench_memory_efficiency(c: &mut Criterion) {
                     .unwrap();
 
                     let temp_file = NamedTempFile::new().unwrap();
-                    save(&pg, temp_file.path()).unwrap();
+                    fs::write(temp_file.path(), pg.buffer()).unwrap();
 
-                    let file_size = std::fs::metadata(temp_file.path()).unwrap().len();
+                    let file_size = fs::metadata(temp_file.path()).unwrap().len();
                     black_box(file_size);
                 });
             },

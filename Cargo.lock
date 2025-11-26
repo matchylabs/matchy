@@ -815,6 +815,7 @@ version = "1.2.2"
 dependencies = [
  "bech32",
  "bs58",
+ "criterion",
  "memchr",
  "rustc-hash 2.1.1",
  "sha2",
@@ -865,6 +866,7 @@ name = "matchy-paraglob"
 version = "1.2.2"
 dependencies = [
  "anyhow",
+ "criterion",
  "matchy-ac",
  "matchy-data-format",
  "matchy-ip-trie",
@@ -872,6 +874,7 @@ dependencies = [
  "memchr",
  "rustc-hash 2.1.1",
  "serde",
+ "tempfile",
  "zerocopy",
 ]
 

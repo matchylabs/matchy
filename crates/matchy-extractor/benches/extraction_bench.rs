@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::extractor::ExtractorBuilder;
+use matchy_extractor::ExtractorBuilder;
 use std::hint::black_box;
 
 fn generate_text_with_domains(size: usize, domain_density: &str) -> String {

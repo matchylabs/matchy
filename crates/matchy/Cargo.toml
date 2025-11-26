@@ -131,11 +131,6 @@ predicates = "3.0"  # Assertions for command output
 cbindgen = "0.29"
 
 [[bench]]
-name = "matchy_bench"
-harness = false
-required-features = ["bench-internal"]
-
-[[bench]]
 name = "cache_bench"
 harness = false
 
@@ -150,11 +145,6 @@ name = "query_profile"
 path = "benches/query_profile.rs"
 harness = false
 required-features = ["bench-internal"]
-
-# Extractor performance benchmark (domain/email/IP extraction)
-[[bench]]
-name = "extractor_bench"
-harness = false
 
 # Auto-reload overhead benchmark (lock-free Arc vs RwLock)
 [[bench]]
