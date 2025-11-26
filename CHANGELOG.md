@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Auto-Build in Match Command**: `matchy match` can now accept JSON or CSV source files directly
+  - Automatically builds database in-memory when `.json` or `.csv` file is provided
+  - Convenient for quick testing and ad-hoc analysis without a separate build step
+  - JSON format: `[{"key": "pattern", "data": {...}}, ...]`
+  - CSV format: requires `key` or `entry` column, other columns become metadata
+  - Example: `matchy match threats.json access.log` (no pre-build needed)
+  - Pre-building with `matchy build` still recommended for production/repeated use
+
 ### Changed
 - **Extractor Thread-Safety**: `Extractor` is now `Send + Sync` and can be shared across threads via `Arc`
   - Moved scratch buffers to thread-local storage (same pattern as `Database` and `Paraglob`)
