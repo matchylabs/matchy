@@ -21,9 +21,9 @@ use crate::offset_format::{
     read_cstring, ACEdge, GlobSegmentIndex, ParaglobHeader, PatternDataMapping, PatternEntry,
     SingleWildcard,
 };
-use matchy_ac::{ACAutomaton, MatchMode as ACMatchMode};
-use matchy_data_format::{DataEncoder, DataValue};
+use matchy_ac::ACAutomaton;
 use matchy_match_mode::MatchMode;
+use matchy_data_format::{DataEncoder, DataValue};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
@@ -213,7 +213,7 @@ impl PatternType {
 /// ```
 pub struct ParaglobBuilder {
     patterns: Vec<PatternType>,
-    mode: ACMatchMode,
+    mode: MatchMode,
     pattern_set: std::collections::HashSet<String>,
 }
 
@@ -223,13 +223,9 @@ impl ParaglobBuilder {
     /// # Arguments
     /// * `mode` - Case sensitivity mode for pattern matching
     pub fn new(mode: MatchMode) -> Self {
-        let ac_mode = match mode {
-            MatchMode::CaseSensitive => ACMatchMode::CaseSensitive,
-            MatchMode::CaseInsensitive => ACMatchMode::CaseInsensitive,
-        };
         Self {
             patterns: Vec::new(),
-            mode: ac_mode,
+            mode,
             pattern_set: std::collections::HashSet::new(),
         }
     }
@@ -310,11 +306,7 @@ impl ParaglobBuilder {
     /// # Returns
     /// A `Paraglob` instance, or an error if building fails
     pub fn build(self) -> Result<Paraglob, ParaglobError> {
-        let mode = match self.mode {
-            ACMatchMode::CaseSensitive => MatchMode::CaseSensitive,
-            ACMatchMode::CaseInsensitive => MatchMode::CaseInsensitive,
-        };
-
+        let mode = self.mode;
         // Build the binary buffer with all serialized data
         let buffer = self.build_internal_v3()?;
 
@@ -375,14 +367,9 @@ impl ParaglobBuilder {
     /// Returns (segment_indices, segment_data, total_size, header_count)
     fn build_glob_segment_section(
         patterns: &[PatternType],
-        mode: ACMatchMode,
+        mode: MatchMode,
     ) -> Result<(Vec<GlobSegmentIndex>, Vec<u8>, usize, usize), ParaglobError> {
         use crate::offset_format::{CharClassItemEncoded, GlobSegmentHeader, GlobSegmentIndex};
-
-        let glob_mode = match mode {
-            ACMatchMode::CaseSensitive => MatchMode::CaseSensitive,
-            ACMatchMode::CaseInsensitive => MatchMode::CaseInsensitive,
-        };
 
         let mut indices = Vec::with_capacity(patterns.len());
         let mut segment_headers = Vec::new();
@@ -392,7 +379,7 @@ impl ParaglobBuilder {
         // Process each pattern
         for pat in patterns {
             let pattern_str = pat.pattern();
-            let segments = Self::serialize_glob_segments(pattern_str, glob_mode)?;
+            let segments = Self::serialize_glob_segments(pattern_str, mode)?;
 
             let first_segment_offset_placeholder = segment_headers.len();
             let segment_count = segments.len() as u16;
@@ -722,8 +709,8 @@ impl ParaglobBuilder {
         // Write header (v2 if we have data, v1 otherwise)
         let mut header = ParaglobHeader::new();
         header.match_mode = match self.mode {
-            ACMatchMode::CaseSensitive => 0,
-            ACMatchMode::CaseInsensitive => 1,
+            MatchMode::CaseSensitive => 0,
+            MatchMode::CaseInsensitive => 1,
         };
         header.ac_node_count = ac_automaton.buffer().len() as u32; // Approximation
         header.ac_nodes_offset = header_size as u32;

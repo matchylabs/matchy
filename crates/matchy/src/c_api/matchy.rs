@@ -3,7 +3,7 @@
 //! This module provides a modern, clean C API for building and querying databases
 //! containing IP addresses and patterns. This is the primary public API.
 
-use crate::database::{Database as RustDatabase, QueryResult};
+use crate::database::{Database, QueryResult};
 use crate::mmdb_builder::MmdbBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
@@ -70,7 +70,7 @@ struct MatchyBuilderInternal {
 }
 
 struct MatchyInternal {
-    database: RustDatabase,
+    database: Database,
 }
 
 // Conversion helpers for opaque types
@@ -540,7 +540,7 @@ pub unsafe extern "C" fn matchy_open_with_options(
     let opts = &*options;
 
     // Build database using fluent API
-    let mut opener = RustDatabase::from(path);
+    let mut opener = Database::from(path);
 
     if opts.cache_capacity == 0 {
         opener = opener.no_cache();
@@ -647,7 +647,7 @@ pub unsafe extern "C" fn matchy_open_buffer(buffer: *const u8, size: usize) -> *
     }
 
     let slice = slice::from_raw_parts(buffer, size);
-    match RustDatabase::from_bytes(slice.to_vec()) {
+    match Database::from_bytes(slice.to_vec()) {
         Ok(db) => {
             let internal = Box::new(MatchyInternal { database: db });
             matchy_t::from_internal(internal)
