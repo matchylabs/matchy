@@ -413,7 +413,7 @@ pub fn cmd_match(
             }
             aggregate_stats = follow_files(
                 inputs.clone(),
-                &*db,
+                &db,
                 &extractor,
                 &format,
                 show_stats,
@@ -477,7 +477,7 @@ pub fn cmd_match(
             // Process this file with aggregate progress tracking
             match process_file_with_aggregate(
                 input_path,
-                &*db,
+                &db,
                 &extractor,
                 &format,
                 show_stats,
