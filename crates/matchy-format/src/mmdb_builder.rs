@@ -6,7 +6,6 @@
 use crate::error::FormatError;
 use crate::mmdb::types::RecordSize;
 use matchy_data_format::{DataEncoder, DataValue};
-use matchy_glob::GlobPattern;
 use matchy_ip_trie::IpTreeBuilder;
 use matchy_literal_hash::LiteralHashBuilder;
 use matchy_match_mode::MatchMode;
@@ -313,15 +312,10 @@ impl MmdbBuilder {
 
         if let Some(stripped) = key.strip_prefix("glob:") {
             // Force glob matching - strip prefix and validate as glob
-            // Use CaseSensitive for validation (mode doesn't matter for syntax checking)
-            if GlobPattern::new(stripped, MatchMode::CaseSensitive).is_ok() {
-                return Ok(EntryType::Glob(stripped.to_string()));
-            }
-            // If explicitly marked as glob but invalid syntax, return error
-            return Err(FormatError::InvalidPattern(format!(
-                "Invalid glob pattern syntax: {}",
-                stripped
-            )));
+            matchy_paraglob::validate_glob_pattern(stripped).map_err(|e| {
+                FormatError::InvalidPattern(format!("Invalid glob pattern syntax: {}", e))
+            })?;
+            return Ok(EntryType::Glob(stripped.to_string()));
         }
 
         if let Some(stripped) = key.strip_prefix("ip:") {
@@ -335,11 +329,10 @@ impl MmdbBuilder {
             return Self::parse_ip_entry(key);
         }
 
-        // Check for glob pattern characters - but validate they form a valid glob
+        // Check for glob pattern characters - validate they form a valid glob
         if key.contains('*') || key.contains('?') || key.contains('[') {
-            // Try to actually parse it as a glob to see if it's valid
-            // Use CaseSensitive for validation (mode doesn't matter for syntax checking)
-            if GlobPattern::new(key, MatchMode::CaseSensitive).is_ok() {
+            // Validate the glob syntax
+            if matchy_paraglob::validate_glob_pattern(key).is_ok() {
                 return Ok(EntryType::Glob(key.to_string()));
             }
             // If it contains glob-like chars but isn't a valid glob, treat as literal

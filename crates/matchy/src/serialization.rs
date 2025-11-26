@@ -5,7 +5,7 @@
 //! memory across processes.
 
 use crate::error::ParaglobError;
-use matchy_glob::MatchMode as GlobMatchMode;
+use matchy_match_mode::MatchMode;
 use matchy_paraglob::Paraglob;
 use memmap2::Mmap;
 use std::fs::File;
@@ -89,10 +89,7 @@ pub fn save<P: AsRef<Path>>(paraglob: &Paraglob, path: P) -> Result<(), Paraglob
 ///
 /// **Note:** This is a low-level API for standalone pattern files. Most users should
 /// use the unified `Database::open()` API instead.
-pub fn load<P: AsRef<Path>>(
-    path: P,
-    mode: GlobMatchMode,
-) -> Result<MmappedParaglob, ParaglobError> {
+pub fn load<P: AsRef<Path>>(path: P, mode: MatchMode) -> Result<MmappedParaglob, ParaglobError> {
     let file = File::open(path.as_ref())
         .map_err(|e| ParaglobError::Io(format!("Failed to open file: {}", e)))?;
 
@@ -152,7 +149,7 @@ pub fn to_bytes(paraglob: &Paraglob) -> Vec<u8> {
 /// let pg2 = from_bytes(&bytes, MatchMode::CaseSensitive).unwrap();
 /// assert_eq!(pg.pattern_count(), pg2.pattern_count());
 /// ```
-pub fn from_bytes(data: &[u8], mode: GlobMatchMode) -> Result<Paraglob, ParaglobError> {
+pub fn from_bytes(data: &[u8], mode: MatchMode) -> Result<Paraglob, ParaglobError> {
     Paraglob::from_buffer(data.to_vec(), mode)
 }
 
@@ -164,10 +161,10 @@ mod tests {
     #[test]
     fn test_bytes_roundtrip() {
         let patterns = vec!["hello", "*.txt", "test_*"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         let bytes = to_bytes(&pg);
-        let pg2 = from_bytes(&bytes, GlobMatchMode::CaseSensitive).unwrap();
+        let pg2 = from_bytes(&bytes, MatchMode::CaseSensitive).unwrap();
 
         assert_eq!(pg.pattern_count(), pg2.pattern_count());
     }
@@ -178,13 +175,13 @@ mod tests {
         let path = temp_dir.join("paraglob_test_file_roundtrip.pgb");
 
         let patterns = vec!["hello", "*.txt", "test_*"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         // Save
         save(&pg, &path).unwrap();
 
         // Load
-        let mut pg_loaded = load(&path, GlobMatchMode::CaseSensitive).unwrap();
+        let mut pg_loaded = load(&path, MatchMode::CaseSensitive).unwrap();
 
         // Test matching produces same results
         let text = "hello test_file.txt";
@@ -204,13 +201,13 @@ mod tests {
         let path = temp_dir.join("paraglob_test_shared_memory.pgb");
 
         let patterns = vec!["hello", "*.txt", "test_*"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
         save(&pg, &path).unwrap();
 
         // Load multiple times (simulates multiple processes)
-        let mut pg1 = load(&path, GlobMatchMode::CaseSensitive).unwrap();
-        let mut pg2 = load(&path, GlobMatchMode::CaseSensitive).unwrap();
-        let mut pg3 = load(&path, GlobMatchMode::CaseSensitive).unwrap();
+        let mut pg1 = load(&path, MatchMode::CaseSensitive).unwrap();
+        let mut pg2 = load(&path, MatchMode::CaseSensitive).unwrap();
+        let mut pg3 = load(&path, MatchMode::CaseSensitive).unwrap();
 
         // All should produce identical results
         let text = "hello.txt";
@@ -235,13 +232,12 @@ mod tests {
         let patterns: Vec<String> = (0..1000).map(|i| format!("pattern_{}_*.txt", i)).collect();
         let pattern_refs: Vec<&str> = patterns.iter().map(|s| s.as_str()).collect();
 
-        let pg =
-            Paraglob::build_from_patterns(&pattern_refs, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&pattern_refs, MatchMode::CaseSensitive).unwrap();
         save(&pg, &path).unwrap();
 
         // Loading should be instant (just mmap syscall)
         let start = std::time::Instant::now();
-        let _pg_loaded = load(&path, GlobMatchMode::CaseSensitive).unwrap();
+        let _pg_loaded = load(&path, MatchMode::CaseSensitive).unwrap();
         let elapsed = start.elapsed();
 
         // Should be very fast (< 100ms) even for large files
@@ -258,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_nonexistent_file() {
-        let result = load("/nonexistent/file.pgb", GlobMatchMode::CaseSensitive);
+        let result = load("/nonexistent/file.pgb", MatchMode::CaseSensitive);
         assert!(result.is_err());
     }
 }

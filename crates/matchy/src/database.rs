@@ -691,7 +691,7 @@ impl Database {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn mode(&self) -> matchy_glob::MatchMode {
+    pub fn mode(&self) -> matchy_match_mode::MatchMode {
         // If there's a pattern matcher, use its mode
         if let Some(ref pm) = self.pattern_matcher {
             return pm.mode();
@@ -701,7 +701,7 @@ impl Database {
             return lh.mode();
         }
         // Default to case-sensitive for IP-only databases
-        matchy_glob::MatchMode::CaseSensitive
+        matchy_match_mode::MatchMode::CaseSensitive
     }
 
     /// Open database with custom options (lower-level API)
@@ -1532,8 +1532,8 @@ impl Database {
 
     /// Read match mode from database metadata
     /// Returns CaseSensitive as default if not found or on error
-    fn read_match_mode_from_metadata(data: &[u8]) -> matchy_glob::MatchMode {
-        use matchy_glob::MatchMode;
+    fn read_match_mode_from_metadata(data: &[u8]) -> matchy_match_mode::MatchMode {
+        use matchy_match_mode::MatchMode;
 
         // Try to read metadata
         if let Ok(metadata) = crate::mmdb::MmdbMetadata::from_file(data) {

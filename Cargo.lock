@@ -770,7 +770,6 @@ dependencies = [
  "matchy-data-format",
  "matchy-extractor",
  "matchy-format",
- "matchy-glob",
  "matchy-ip-trie",
  "matchy-literal-hash",
  "matchy-match-mode",
@@ -829,7 +828,6 @@ dependencies = [
  "anyhow",
  "libc",
  "matchy-data-format",
- "matchy-glob",
  "matchy-ip-trie",
  "matchy-literal-hash",
  "matchy-match-mode",
@@ -842,13 +840,6 @@ dependencies = [
  "tempfile",
  "xxhash-rust",
  "zerocopy",
-]
-
-[[package]]
-name = "matchy-glob"
-version = "1.2.2"
-dependencies = [
- "matchy-match-mode",
 ]
 
 [[package]]
@@ -876,7 +867,6 @@ dependencies = [
  "anyhow",
  "matchy-ac",
  "matchy-data-format",
- "matchy-glob",
  "matchy-ip-trie",
  "matchy-match-mode",
  "memchr",

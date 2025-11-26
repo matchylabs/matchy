@@ -6,7 +6,7 @@
 use crate::database::{Database as RustDatabase, QueryResult};
 use crate::mmdb_builder::MmdbBuilder;
 use matchy_data_format::DataValue;
-use matchy_glob::MatchMode;
+use matchy_match_mode::MatchMode;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;

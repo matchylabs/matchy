@@ -10,7 +10,6 @@ publish = false  # Internal crate for now
 [dependencies]
 matchy-match-mode = { path = "../matchy-match-mode" }
 matchy-ac = { path = "../matchy-ac" }
-matchy-glob = { path = "../matchy-glob" }
 matchy-data-format = { path = "../matchy-data-format" }
 matchy-ip-trie = { path = "../matchy-ip-trie" }  # For error.rs conversions
 zerocopy.workspace = true

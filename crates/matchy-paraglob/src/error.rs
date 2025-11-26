@@ -69,10 +69,10 @@ impl From<&str> for ParaglobError {
     }
 }
 
-impl From<matchy_glob::GlobError> for ParaglobError {
-    fn from(err: matchy_glob::GlobError) -> Self {
+impl From<crate::glob::GlobError> for ParaglobError {
+    fn from(err: crate::glob::GlobError) -> Self {
         match err {
-            matchy_glob::GlobError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
+            crate::glob::GlobError::InvalidPattern(msg) => ParaglobError::InvalidPattern(msg),
         }
     }
 }

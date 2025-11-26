@@ -53,7 +53,7 @@
 use crate::error::ParaglobError;
 use crate::mmdb_builder::MmdbBuilder;
 use matchy_data_format::DataValue;
-use matchy_glob::MatchMode;
+use matchy_match_mode::MatchMode;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;

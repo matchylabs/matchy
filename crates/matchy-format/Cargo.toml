@@ -13,7 +13,6 @@ matchy-ip-trie = { path = "../matchy-ip-trie" }
 matchy-data-format = { path = "../matchy-data-format" }
 matchy-paraglob = { path = "../matchy-paraglob" }
 matchy-literal-hash = { path = "../matchy-literal-hash" }
-matchy-glob = { path = "../matchy-glob" }
 matchy-match-mode = { path = "../matchy-match-mode" }
 
 # External dependencies

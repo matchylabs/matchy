@@ -16,13 +16,14 @@
 //! All matching operations work directly on this buffer using offsets.
 
 use crate::error::ParaglobError;
+use crate::glob::{CharClassItem, GlobPattern, GlobSegment};
 use crate::offset_format::{
     read_cstring, ACEdge, GlobSegmentIndex, ParaglobHeader, PatternDataMapping, PatternEntry,
     SingleWildcard,
 };
 use matchy_ac::{ACAutomaton, MatchMode as ACMatchMode};
 use matchy_data_format::{DataEncoder, DataValue};
-use matchy_glob::{CharClassItem, GlobPattern, GlobSegment, MatchMode as GlobMatchMode};
+use matchy_match_mode::MatchMode;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
@@ -219,10 +220,10 @@ impl ParaglobBuilder {
     ///
     /// # Arguments
     /// * `mode` - Case sensitivity mode for pattern matching
-    pub fn new(mode: GlobMatchMode) -> Self {
+    pub fn new(mode: MatchMode) -> Self {
         let ac_mode = match mode {
-            GlobMatchMode::CaseSensitive => ACMatchMode::CaseSensitive,
-            GlobMatchMode::CaseInsensitive => ACMatchMode::CaseInsensitive,
+            MatchMode::CaseSensitive => ACMatchMode::CaseSensitive,
+            MatchMode::CaseInsensitive => ACMatchMode::CaseInsensitive,
         };
         Self {
             patterns: Vec::new(),
@@ -306,8 +307,8 @@ impl ParaglobBuilder {
     /// A `Paraglob` instance, or an error if building fails
     pub fn build(self) -> Result<Paraglob, ParaglobError> {
         let mode = match self.mode {
-            ACMatchMode::CaseSensitive => GlobMatchMode::CaseSensitive,
-            ACMatchMode::CaseInsensitive => GlobMatchMode::CaseInsensitive,
+            ACMatchMode::CaseSensitive => MatchMode::CaseSensitive,
+            ACMatchMode::CaseInsensitive => MatchMode::CaseInsensitive,
         };
 
         // Build the binary buffer with all serialized data
@@ -359,7 +360,7 @@ impl ParaglobBuilder {
     /// Serialize glob segments for a single pattern
     fn serialize_glob_segments(
         pattern_str: &str,
-        mode: GlobMatchMode,
+        mode: MatchMode,
     ) -> Result<Vec<GlobSegment>, ParaglobError> {
         // Use GlobPattern::new() which calls parse internally
         let pattern = GlobPattern::new(pattern_str, mode)?;
@@ -375,8 +376,8 @@ impl ParaglobBuilder {
         use crate::offset_format::{CharClassItemEncoded, GlobSegmentHeader, GlobSegmentIndex};
 
         let glob_mode = match mode {
-            ACMatchMode::CaseSensitive => GlobMatchMode::CaseSensitive,
-            ACMatchMode::CaseInsensitive => GlobMatchMode::CaseInsensitive,
+            ACMatchMode::CaseSensitive => MatchMode::CaseSensitive,
+            ACMatchMode::CaseInsensitive => MatchMode::CaseInsensitive,
         };
 
         let mut indices = Vec::with_capacity(patterns.len());
@@ -936,7 +937,7 @@ pub struct Paraglob {
     /// Binary buffer containing all data
     buffer: BufferStorage,
     /// Matching mode (public for Database::mode() access)
-    pub(crate) mode: GlobMatchMode,
+    pub(crate) mode: MatchMode,
     /// Memory-mapped hash table for AC literal ID to pattern IDs mapping (O(1) lookup)
     ac_literal_hash: Option<crate::literal_hash::ACLiteralHash<'static>>,
     /// Pattern ID to data mapping (lazy-loaded from buffer)
@@ -945,7 +946,7 @@ pub struct Paraglob {
 
 // SAFETY: Paraglob is Send + Sync because:
 // - buffer: Both Owned(Vec<u8>) and Borrowed(&'static [u8]) are Send + Sync
-// - mode: GlobMatchMode is Copy, thus Send + Sync
+// - mode: MatchMode is Copy, thus Send + Sync
 // - ac_literal_hash: Contains only offsets and immutable references, Send + Sync
 // - pattern_data_map: Contains only offsets, Send + Sync
 // - All scratch buffers moved to thread-local storage
@@ -955,11 +956,11 @@ unsafe impl Sync for Paraglob {}
 impl Paraglob {
     /// Create a new empty Paraglob
     pub fn new() -> Self {
-        Self::with_mode(GlobMatchMode::CaseSensitive)
+        Self::with_mode(MatchMode::CaseSensitive)
     }
 
     /// Create with specified match mode
-    pub fn with_mode(mode: GlobMatchMode) -> Self {
+    pub fn with_mode(mode: MatchMode) -> Self {
         Self {
             buffer: BufferStorage::Owned(Vec::new()),
             mode,
@@ -969,15 +970,12 @@ impl Paraglob {
     }
 
     /// Get the match mode
-    pub fn mode(&self) -> GlobMatchMode {
+    pub fn mode(&self) -> MatchMode {
         self.mode
     }
 
     /// Build Paraglob from patterns
-    pub fn build_from_patterns(
-        patterns: &[&str],
-        mode: GlobMatchMode,
-    ) -> Result<Self, ParaglobError> {
+    pub fn build_from_patterns(patterns: &[&str], mode: MatchMode) -> Result<Self, ParaglobError> {
         Self::build_from_patterns_with_data(patterns, None, mode)
     }
 
@@ -1012,7 +1010,7 @@ impl Paraglob {
     pub fn build_from_patterns_with_data(
         patterns: &[&str],
         data: Option<&[Option<DataValue>]>,
-        mode: GlobMatchMode,
+        mode: MatchMode,
     ) -> Result<Self, ParaglobError> {
         let mut builder = ParaglobBuilder::new(mode);
 
@@ -1186,7 +1184,7 @@ impl Paraglob {
     fn run_ac_matching_into_static(
         ac_buffer: &[u8],
         text: &[u8],
-        mode: GlobMatchMode,
+        mode: MatchMode,
         matches: &mut HashSet<u32>,
     ) {
         use crate::offset_format::ACNodeHot;
@@ -1198,11 +1196,11 @@ impl Paraglob {
         // Pre-lowercase text once for case-insensitive mode using SIMD (4-8x faster)
         let mut normalized_text_buf: Vec<u8> = Vec::new();
         let search_text = match mode {
-            GlobMatchMode::CaseInsensitive => {
+            MatchMode::CaseInsensitive => {
                 crate::simd_utils::ascii_lowercase(text, &mut normalized_text_buf);
                 normalized_text_buf.as_slice()
             }
-            GlobMatchMode::CaseSensitive => text,
+            MatchMode::CaseSensitive => text,
         };
 
         let mut current_offset = 0usize; // Start at root node
@@ -1373,7 +1371,7 @@ impl Paraglob {
         buffer: &[u8],
         pattern_id: u32,
         text: &str,
-        mode: GlobMatchMode,
+        mode: MatchMode,
         glob_segments_offset: usize,
     ) -> Result<bool, ParaglobError> {
         eprintln!(
@@ -1420,7 +1418,7 @@ impl Paraglob {
         segment_count: usize,
         text_pos: usize,
         seg_idx: usize,
-        mode: GlobMatchMode,
+        mode: MatchMode,
         steps_remaining: &mut usize,
     ) -> Result<bool, ParaglobError> {
         use crate::offset_format::{CharClassItemEncoded, GlobSegmentHeader};
@@ -1466,8 +1464,8 @@ impl Paraglob {
 
                 let remaining = &text[text_pos..];
                 let (matches, advance_bytes) = match mode {
-                    GlobMatchMode::CaseSensitive => (remaining.starts_with(lit), lit.len()),
-                    GlobMatchMode::CaseInsensitive => {
+                    MatchMode::CaseSensitive => (remaining.starts_with(lit), lit.len()),
+                    MatchMode::CaseInsensitive => {
                         let mut lit_chars = lit.chars();
                         let mut matched_bytes = 0;
                         let mut matches = true;
@@ -1564,8 +1562,8 @@ impl Paraglob {
                 };
 
                 let ch_normalized = match mode {
-                    GlobMatchMode::CaseSensitive => ch,
-                    GlobMatchMode::CaseInsensitive => ch.to_ascii_lowercase(),
+                    MatchMode::CaseSensitive => ch,
+                    MatchMode::CaseInsensitive => ch.to_ascii_lowercase(),
                 };
 
                 let data_offset = seg_header.data_offset as usize;
@@ -1596,8 +1594,8 @@ impl Paraglob {
                             // Char
                             if let Some(class_ch) = char::from_u32(item.char1) {
                                 let class_ch_normalized = match mode {
-                                    GlobMatchMode::CaseSensitive => class_ch,
-                                    GlobMatchMode::CaseInsensitive => class_ch.to_ascii_lowercase(),
+                                    MatchMode::CaseSensitive => class_ch,
+                                    MatchMode::CaseInsensitive => class_ch.to_ascii_lowercase(),
                                 };
                                 ch_normalized == class_ch_normalized
                             } else {
@@ -1610,12 +1608,12 @@ impl Paraglob {
                                 (char::from_u32(item.char1), char::from_u32(item.char2))
                             {
                                 let start_norm = match mode {
-                                    GlobMatchMode::CaseSensitive => start,
-                                    GlobMatchMode::CaseInsensitive => start.to_ascii_lowercase(),
+                                    MatchMode::CaseSensitive => start,
+                                    MatchMode::CaseInsensitive => start.to_ascii_lowercase(),
                                 };
                                 let end_norm = match mode {
-                                    GlobMatchMode::CaseSensitive => end,
-                                    GlobMatchMode::CaseInsensitive => end.to_ascii_lowercase(),
+                                    MatchMode::CaseSensitive => end,
+                                    MatchMode::CaseInsensitive => end.to_ascii_lowercase(),
                                 };
                                 ch_normalized >= start_norm && ch_normalized <= end_norm
                             } else {
@@ -1659,7 +1657,7 @@ impl Paraglob {
     ///
     /// Uses ACLiteralHash for O(1) AC literal lookups. Load time is O(1) since
     /// the hash table is already serialized in the buffer.
-    pub fn from_buffer(buffer: Vec<u8>, mode: GlobMatchMode) -> Result<Self, ParaglobError> {
+    pub fn from_buffer(buffer: Vec<u8>, mode: MatchMode) -> Result<Self, ParaglobError> {
         if buffer.len() < mem::size_of::<ParaglobHeader>() {
             return Err(ParaglobError::SerializationError(
                 "Buffer too small".to_string(),
@@ -1724,10 +1722,7 @@ impl Paraglob {
     /// no data copying or HashMap building.
     ///
     /// Validates UTF-8 on every pattern string read.
-    pub unsafe fn from_mmap(
-        slice: &'static [u8],
-        mode: GlobMatchMode,
-    ) -> Result<Self, ParaglobError> {
+    pub unsafe fn from_mmap(slice: &'static [u8], mode: MatchMode) -> Result<Self, ParaglobError> {
         if slice.len() < mem::size_of::<ParaglobHeader>() {
             return Err(ParaglobError::SerializationError(
                 "Buffer too small".to_string(),
@@ -1907,7 +1902,7 @@ mod tests {
     #[test]
     fn test_build_simple() {
         let patterns = vec!["hello", "world"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         assert_eq!(pg.pattern_count(), 2);
         assert!(!pg.buffer().is_empty());
@@ -1916,7 +1911,7 @@ mod tests {
     #[test]
     fn test_literal_matching() {
         let patterns = vec!["hello", "world"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         let matches = pg.find_all("hello world");
         assert_eq!(matches.len(), 2);
@@ -1927,7 +1922,7 @@ mod tests {
     #[test]
     fn test_glob_matching() {
         let patterns = vec!["*.txt", "test_*"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         let matches = pg.find_all("test_file.txt");
         assert_eq!(matches.len(), 2);
@@ -1936,7 +1931,7 @@ mod tests {
     #[test]
     fn test_pure_wildcard() {
         let patterns = vec!["*", "??"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         let matches = pg.find_all("ab");
         assert_eq!(matches.len(), 2); // Both match
@@ -1945,7 +1940,7 @@ mod tests {
     #[test]
     fn test_case_insensitive() {
         let patterns = vec!["Hello", "*.TXT"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseInsensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseInsensitive).unwrap();
 
         let matches = pg.find_all("hello test.txt");
         assert_eq!(matches.len(), 2);
@@ -1954,7 +1949,7 @@ mod tests {
     #[test]
     fn test_no_match() {
         let patterns = vec!["hello", "*.txt"];
-        let pg = Paraglob::build_from_patterns(&patterns, GlobMatchMode::CaseSensitive).unwrap();
+        let pg = Paraglob::build_from_patterns(&patterns, MatchMode::CaseSensitive).unwrap();
 
         let matches = pg.find_all("goodbye world");
         assert!(matches.is_empty());

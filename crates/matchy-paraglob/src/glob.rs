@@ -1,9 +1,9 @@
-//! Glob pattern matching implementation.
+//! Glob pattern matching implementation (internal to paraglob).
 //!
 //! This module provides glob pattern support with wildcards (`*`, `?`), character classes
 //! (`[...]`, `[!...]`), and literal matching. Patterns are parsed into structured segments
 //! and matched efficiently against text.
-
+//!
 //! # Glob Syntax
 //!
 //! - `*` - Matches zero or more of any character (greedy)
@@ -12,35 +12,12 @@
 //! - `[!abc]` or `[^abc]` - Matches one character NOT in the set
 //! - `[a-z]` - Matches one character in the range (a through z)
 //! - `\x` - Escapes special character x (literal *)
-//!
-//! # Examples
-//!
-//! ```
-//! use matchy_glob::{GlobPattern, MatchMode, GlobError};
-//!
-//! // Simple wildcard matching
-//! let pattern = GlobPattern::new("*.txt", MatchMode::CaseSensitive)?;
-//! assert!(pattern.matches("file.txt"));
-//! assert!(pattern.matches("document.txt"));
-//! assert!(!pattern.matches("file.pdf"));
-//!
-//! // Character classes
-//! let pattern = GlobPattern::new("file[0-9].txt", MatchMode::CaseSensitive)?;
-//! assert!(pattern.matches("file1.txt"));
-//! assert!(pattern.matches("file9.txt"));
-//! assert!(!pattern.matches("fileA.txt"));
-//!
-//! // Negated character classes
-//! let pattern = GlobPattern::new("file[!0-9].txt", MatchMode::CaseSensitive)?;
-//! assert!(pattern.matches("fileA.txt"));
-//! assert!(!pattern.matches("file1.txt"));
-//! # Ok::<(), GlobError>(())
-//! ```
 
+// Some methods aren't used yet but kept for completeness
+#![allow(dead_code)]
+
+use matchy_match_mode::MatchMode;
 use std::fmt;
-
-// Re-export MatchMode from shared crate
-pub use matchy_match_mode::MatchMode;
 
 /// Error type for glob pattern operations
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +38,7 @@ impl std::error::Error for GlobError {}
 
 /// A segment of a glob pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GlobSegment {
+pub(crate) enum GlobSegment {
     /// Literal text segment (no wildcards)
     Literal(String),
 
@@ -82,7 +59,7 @@ pub enum GlobSegment {
 
 /// Item in a character class.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CharClassItem {
+pub(crate) enum CharClassItem {
     /// Single character
     Char(char),
     /// Range of characters (inclusive)
@@ -91,7 +68,7 @@ pub enum CharClassItem {
 
 /// A parsed glob pattern.
 #[derive(Debug, Clone)]
-pub struct GlobPattern {
+pub(crate) struct GlobPattern {
     /// Original pattern string
     pattern: String,
     /// Parsed segments
@@ -111,17 +88,7 @@ impl GlobPattern {
     /// # Errors
     ///
     /// Returns an error if the pattern is malformed (e.g., unclosed brackets).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use matchy_glob::{GlobPattern, MatchMode, GlobError};
-    ///
-    /// let pattern = GlobPattern::new("*.txt", MatchMode::CaseSensitive)?;
-    /// assert!(pattern.matches("hello.txt"));
-    /// # Ok::<(), GlobError>(())
-    /// ```
-    pub fn new(pattern: &str, mode: MatchMode) -> Result<Self, GlobError> {
+    pub(crate) fn new(pattern: &str, mode: MatchMode) -> Result<Self, GlobError> {
         let segments = Self::parse(pattern, mode)?;
         Ok(Self {
             pattern: pattern.to_string(),
@@ -140,7 +107,11 @@ impl GlobPattern {
     /// * `pattern` - The original pattern string
     /// * `segments` - Pre-parsed segments
     /// * `mode` - Case-sensitive or case-insensitive matching
-    pub fn from_segments(pattern: String, segments: Vec<GlobSegment>, mode: MatchMode) -> Self {
+    pub(crate) fn from_segments(
+        pattern: String,
+        segments: Vec<GlobSegment>,
+        mode: MatchMode,
+    ) -> Self {
         Self {
             pattern,
             segments,
@@ -149,34 +120,22 @@ impl GlobPattern {
     }
 
     /// Returns the original pattern string.
-    pub fn pattern(&self) -> &str {
+    pub(crate) fn pattern(&self) -> &str {
         &self.pattern
     }
 
     /// Returns the match mode.
-    pub fn mode(&self) -> MatchMode {
+    pub(crate) fn mode(&self) -> MatchMode {
         self.mode
     }
 
     /// Returns the parsed segments.
-    pub fn segments(&self) -> &[GlobSegment] {
+    pub(crate) fn segments(&self) -> &[GlobSegment] {
         &self.segments
     }
 
     /// Checks if the pattern matches the given text.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use matchy_glob::{GlobPattern, MatchMode, GlobError};
-    ///
-    /// let pattern = GlobPattern::new("hello*world", MatchMode::CaseSensitive)?;
-    /// assert!(pattern.matches("hello world"));
-    /// assert!(pattern.matches("hello beautiful world"));
-    /// assert!(!pattern.matches("goodbye world"));
-    /// # Ok::<(), GlobError>(())
-    /// ```
-    pub fn matches(&self, text: &str) -> bool {
+    pub(crate) fn matches(&self, text: &str) -> bool {
         // Limit backtracking steps to prevent OOM with pathological patterns
         // This prevents exponential backtracking in patterns like *a*b*c*d*e*
         let mut steps_remaining = 100_000;
