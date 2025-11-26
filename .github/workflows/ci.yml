@@ -36,10 +36,10 @@ jobs:
         with:
           components: clippy
       
-- name: Run clippy (library and bins only, no bench features)
+      - name: Run clippy (library and bins only, no bench features)
         run: cargo clippy --lib --bins -- -D warnings
 
-- name: Dead code check (fail on dead_code)
+      - name: Dead code check (fail on dead_code)
         run: cargo check --lib --bins
         env:
           RUSTFLAGS: -Ddead_code
@@ -84,10 +84,10 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target
       
-- name: Build
+      - name: Build
         run: cargo build --verbose
       
-- name: Run tests (lib/bins/tests only; skip doctests; enable bench-internal for test needs)
+      - name: Run tests (lib/bins/tests only; skip doctests; enable bench-internal for test needs)
         run: cargo test --verbose --lib --bins --tests --features bench-internal
       
       - name: Run integration tests explicitly
@@ -96,7 +96,7 @@ jobs:
       - name: Build release
         run: cargo build --release --verbose
       
-- name: Run examples (public API only)
+      - name: Run examples (public API only)
         run: |
           cargo run --release --example cache_demo
 
@@ -129,7 +129,7 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-bench
       
-- name: Compile benchmarks (bench-internal)
+      - name: Compile benchmarks (bench-internal)
         run: cargo bench --no-run --features bench-internal
       
       - name: Run benchmark smoke test (bench-internal)
@@ -147,7 +147,7 @@ jobs:
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin
       
-- name: Generate coverage (no bench features)
+      - name: Generate coverage (no bench features)
         run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml
       
       - name: Upload coverage to Codecov
