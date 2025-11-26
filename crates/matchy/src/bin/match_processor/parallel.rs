@@ -114,14 +114,13 @@ pub use matchy::processing::WorkerStats;
 #[allow(clippy::too_many_arguments)]
 pub fn process_parallel(
     inputs: Vec<PathBuf>,
-    database_path: &Path,
+    db: Arc<matchy::Database>,
     num_threads: usize,
     explicit_readers: Option<usize>,
     _batch_bytes: usize,
     output_format: &str,
     _show_stats: bool,
     _show_progress: bool,
-    cache_size: usize,
     _overall_start: Instant,
     extractor_config: ExtractorConfig,
     debug_routing: bool,
@@ -154,11 +153,6 @@ pub fn process_parallel(
         None
     };
     let overall_start = _overall_start;
-
-    // Open database once and wrap in Arc for efficient sharing
-    let db = Arc::new(
-        init_worker_database(database_path, cache_size).context("Failed to open database")?,
-    );
 
     let ext_config = extractor_config.clone();
 
