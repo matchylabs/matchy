@@ -482,7 +482,11 @@ impl ACBuilder {
             } as u32;
 
             // Validate counts fit in u8 (max 255)
-            let edge_count_u8 = state.transitions.len().min(255) as u8;
+            // For StateKind::One, edge_count should be 0 (edge stored inline)
+            let edge_count_u8 = match kind {
+                StateKind::One => 0, // Single edge stored inline, not in edge array
+                _ => state.transitions.len().min(255) as u8,
+            };
             let pattern_count_u8 = state.outputs.len().min(255) as u8;
 
             // Create hot node with optimal field ordering for cache access
@@ -520,12 +524,17 @@ impl ACBuilder {
 pub struct ACAutomaton {
     /// Binary buffer containing all automaton data
     buffer: Vec<u8>,
+    /// Number of AC nodes in the automaton
+    node_count: usize,
 }
 
 impl ACAutomaton {
     /// Create a new AC automaton (initially empty)
     pub fn new(_mode: MatchMode) -> Self {
-        Self { buffer: Vec::new() }
+        Self {
+            buffer: Vec::new(),
+            node_count: 0,
+        }
     }
 
     /// Build the automaton from patterns
@@ -546,14 +555,20 @@ impl ACAutomaton {
         }
 
         builder.build_failure_links();
+        let node_count = builder.states.len();
         let buffer = builder.serialize()?;
 
-        Ok(Self { buffer })
+        Ok(Self { buffer, node_count })
     }
 
     /// Get the buffer (for serialization)
     pub fn buffer(&self) -> &[u8] {
         &self.buffer
+    }
+
+    /// Get the number of AC nodes in the automaton
+    pub fn node_count(&self) -> usize {
+        self.node_count
     }
 }
 

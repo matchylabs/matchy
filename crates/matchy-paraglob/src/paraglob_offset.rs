@@ -571,12 +571,14 @@ impl ParaglobBuilder {
             }
         }
 
-        // Build AC automaton
-        let ac_automaton = if !ac_literals.is_empty() {
+        // Build AC automaton and get node count
+        let (ac_automaton, ac_node_count) = if !ac_literals.is_empty() {
             let ac_refs: Vec<&str> = ac_literals.iter().map(|s| s.as_str()).collect();
-            ACAutomaton::build(&ac_refs, self.mode)?
+            let automaton = ACAutomaton::build(&ac_refs, self.mode)?;
+            let node_count = automaton.node_count();
+            (automaton, node_count)
         } else {
-            ACAutomaton::new(self.mode)
+            (ACAutomaton::new(self.mode), 0)
         };
 
         // Build mapping from AC literal ID to pattern IDs
@@ -593,13 +595,19 @@ impl ParaglobBuilder {
         let ac_buffer = ac_automaton.buffer();
         let ac_size = ac_buffer.len();
 
+        // Add padding after header to align AC buffer to cache-line boundary
+        // This ensures dense lookup tables maintain their 64-byte alignment for optimal cache performance
+        let ac_alignment = 64; // Cache-line alignment for dense lookups
+        let ac_padding = (ac_alignment - (header_size % ac_alignment)) % ac_alignment;
+        let ac_start = header_size + ac_padding;
+
         // Add padding after AC section to ensure pattern entries are 8-byte aligned
-        let unaligned_patterns_start = header_size + ac_size;
+        let unaligned_patterns_start = ac_start + ac_size;
         let alignment = 8; // PatternEntry needs 8-byte alignment (16 bytes, 8-byte fields)
-        let ac_padding = (alignment - (unaligned_patterns_start % alignment)) % alignment;
+        let ac_padding_patterns = (alignment - (unaligned_patterns_start % alignment)) % alignment;
 
         // Pattern entries section
-        let patterns_start = unaligned_patterns_start + ac_padding;
+        let patterns_start = unaligned_patterns_start + ac_padding_patterns;
         let pattern_entry_size = mem::size_of::<PatternEntry>();
         let pattern_entries_size = self.patterns.len() * pattern_entry_size;
 
@@ -692,8 +700,9 @@ impl ParaglobBuilder {
 
         // Allocate buffer (including padding for alignment)
         let total_size = header_size
+            + ac_padding  // Cache-line alignment padding before AC buffer
             + ac_size
-            + ac_padding  // Alignment padding before pattern entries
+            + ac_padding_patterns  // Alignment padding before pattern entries
             + pattern_entries_size
             + pattern_strings_size
             + padding  // Alignment padding before wildcards
@@ -712,8 +721,8 @@ impl ParaglobBuilder {
             MatchMode::CaseSensitive => 0,
             MatchMode::CaseInsensitive => 1,
         };
-        header.ac_node_count = ac_automaton.buffer().len() as u32; // Approximation
-        header.ac_nodes_offset = header_size as u32;
+        header.ac_node_count = ac_node_count as u32;
+        header.ac_nodes_offset = ac_start as u32; // Points to aligned AC buffer
         header.ac_edges_size = ac_size as u32;
         header.pattern_count = self.patterns.len() as u32;
         header.patterns_offset = patterns_start as u32;
@@ -745,8 +754,8 @@ impl ParaglobBuilder {
             ptr.write(header);
         }
 
-        // Write AC automaton data
-        buffer[header_size..header_size + ac_size].copy_from_slice(ac_buffer);
+        // Write AC automaton data at aligned offset
+        buffer[ac_start..ac_start + ac_size].copy_from_slice(ac_buffer);
 
         // Padding bytes after AC automaton are already zero-initialized
 

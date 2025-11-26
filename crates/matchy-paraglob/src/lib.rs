@@ -50,6 +50,6 @@ pub mod validation;
 
 // Re-export validation types for convenience
 pub use validation::{
-    build_pattern_info, validate_ac_literal_mapping, validate_meta_word_mappings,
-    validate_patterns, ParaglobStats, ParaglobValidationResult,
+    build_pattern_info, get_pattern_data_offsets, validate_ac_literal_mapping,
+    validate_meta_word_mappings, validate_patterns, ParaglobStats, ParaglobValidationResult,
 };

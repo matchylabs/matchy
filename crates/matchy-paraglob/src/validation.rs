@@ -168,7 +168,7 @@ pub fn build_pattern_info(
 
 /// Validate AC literal mapping consistency
 ///
-/// Validates the AC literal mapping structure (v3+ format).
+/// Validates the AC literal mapping structure (v3+ format - hash table).
 /// Checks entry counts, pattern ID references, and structure integrity.
 ///
 /// # Arguments
@@ -187,69 +187,99 @@ pub fn validate_ac_literal_mapping(
 ) -> ParaglobValidationResult {
     let mut result = ParaglobValidationResult::new();
 
-    if map_offset + 4 > buffer.len() {
+    // Load the hash table and validate it
+    let hash_buffer = &buffer[map_offset..];
+    if let Err(e) = crate::literal_hash::ACLiteralHash::from_buffer(hash_buffer) {
         result
             .errors
-            .push("AC literal mapping header truncated".to_string());
+            .push(format!("Failed to load AC literal hash table: {}", e));
         return result;
     }
 
-    // Read entry count
-    let entry_count = u32::from_le_bytes([
-        buffer[map_offset],
-        buffer[map_offset + 1],
-        buffer[map_offset + 2],
-        buffer[map_offset + 3],
+    // Validate all pattern IDs in the hash table
+    // We need to walk through the hash table entries and check pattern lists
+    let header_size = mem::size_of::<crate::literal_hash::ACLiteralHashHeader>();
+    let table_start = map_offset + header_size;
+    let entry_size = mem::size_of::<crate::literal_hash::ACHashEntry>();
+
+    // Read header to get table size
+    if hash_buffer.len() < header_size {
+        result
+            .errors
+            .push("AC literal hash header truncated".to_string());
+        return result;
+    }
+
+    let table_size = u32::from_le_bytes([
+        hash_buffer[12],
+        hash_buffer[13],
+        hash_buffer[14],
+        hash_buffer[15],
     ]) as usize;
 
-    let mut current_offset = map_offset + 4;
-    let mut referenced_patterns = HashSet::new();
-    let mut entries_checked = 0;
+    let patterns_start_in_hash = u32::from_le_bytes([
+        hash_buffer[16],
+        hash_buffer[17],
+        hash_buffer[18],
+        hash_buffer[19],
+    ]) as usize;
 
-    // Walk through variable-length entries
-    for i in 0..entry_count {
-        // Each entry: [literal_id: u32][pattern_count: u32][pattern_ids: u32...]
-        if current_offset + 8 > buffer.len() {
-            result.warnings.push(format!(
-                "AC literal mapping truncated at entry {} of {}",
-                i, entry_count
-            ));
+    let mut referenced_patterns = HashSet::new();
+    let mut entries_validated = 0;
+
+    // Walk through hash table entries
+    for i in 0..table_size {
+        let entry_offset = table_start - map_offset + i * entry_size;
+        if entry_offset + entry_size > hash_buffer.len() {
+            result
+                .errors
+                .push(format!("Hash table entry {} out of bounds", i));
             break;
         }
 
-        let _literal_id = u32::from_le_bytes([
-            buffer[current_offset],
-            buffer[current_offset + 1],
-            buffer[current_offset + 2],
-            buffer[current_offset + 3],
+        let literal_id = u32::from_le_bytes([
+            hash_buffer[entry_offset],
+            hash_buffer[entry_offset + 1],
+            hash_buffer[entry_offset + 2],
+            hash_buffer[entry_offset + 3],
         ]);
+
+        // Skip empty slots
+        if literal_id == 0xFFFFFFFF {
+            continue;
+        }
+
+        let patterns_offset = u32::from_le_bytes([
+            hash_buffer[entry_offset + 4],
+            hash_buffer[entry_offset + 5],
+            hash_buffer[entry_offset + 6],
+            hash_buffer[entry_offset + 7],
+        ]) as usize;
 
         let pattern_count_entry = u32::from_le_bytes([
-            buffer[current_offset + 4],
-            buffer[current_offset + 5],
-            buffer[current_offset + 6],
-            buffer[current_offset + 7],
-        ]);
+            hash_buffer[entry_offset + 8],
+            hash_buffer[entry_offset + 9],
+            hash_buffer[entry_offset + 10],
+            hash_buffer[entry_offset + 11],
+        ]) as usize;
 
-        current_offset += 8;
-
-        // Read pattern IDs
-        let pattern_ids_size = (pattern_count_entry as usize) * 4;
-        if current_offset + pattern_ids_size > buffer.len() {
-            result.warnings.push(format!(
-                "AC literal mapping entry {} pattern IDs truncated",
-                i
-            ));
-            break;
-        }
-
+        // Validate pattern IDs
+        let abs_patterns_offset = patterns_start_in_hash + patterns_offset;
         for j in 0..pattern_count_entry {
-            let pid_offset = current_offset + (j as usize) * 4;
+            let pid_offset = abs_patterns_offset + j * 4;
+            if pid_offset + 4 > hash_buffer.len() {
+                result.errors.push(format!(
+                    "Pattern list for literal {} truncated at pattern {}",
+                    literal_id, j
+                ));
+                break;
+            }
+
             let pattern_id = u32::from_le_bytes([
-                buffer[pid_offset],
-                buffer[pid_offset + 1],
-                buffer[pid_offset + 2],
-                buffer[pid_offset + 3],
+                hash_buffer[pid_offset],
+                hash_buffer[pid_offset + 1],
+                hash_buffer[pid_offset + 2],
+                hash_buffer[pid_offset + 3],
             ]);
 
             if pattern_id >= pattern_count {
@@ -262,11 +292,10 @@ pub fn validate_ac_literal_mapping(
             }
         }
 
-        current_offset += pattern_ids_size;
-        entries_checked += 1;
+        entries_validated += 1;
     }
 
-    result.stats.ac_literal_map_entries = entries_checked as u32;
+    result.stats.ac_literal_map_entries = entries_validated;
 
     result
 }
@@ -362,6 +391,72 @@ pub fn validate_meta_word_mappings(
     result
 }
 
+/// Get pattern data offsets for cross-component validation
+///
+/// Extracts all data_offset values from PatternDataMapping entries.
+/// These are FILE-ABSOLUTE offsets pointing to the MMDB data section.
+/// matchy-format validates these offsets point to valid data.
+///
+/// # Arguments
+///
+/// * `buffer` - The PARAGLOB section buffer (starting at PARAGLOB magic)
+/// * `header` - Already-parsed ParaglobHeader
+///
+/// # Returns
+///
+/// Vector of file-absolute data offsets, empty if no data mappings exist.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // matchy-format uses this to validate external references
+/// let offsets = get_pattern_data_offsets(paraglob_buffer, &header)?;
+/// for offset in offsets {
+///     validate_offset_in_data_section(offset, data_start, data_end)?;
+/// }
+/// ```
+pub fn get_pattern_data_offsets(
+    buffer: &[u8],
+    header: &crate::offset_format::ParaglobHeader,
+) -> Result<Vec<u32>, String> {
+    // Check if this PARAGLOB section has data mappings
+    if !header.has_data_section() || header.mapping_count == 0 {
+        return Ok(Vec::new()); // No external references
+    }
+
+    let mappings_offset = header.mapping_table_offset as usize;
+    let mapping_count = header.mapping_count as usize;
+    let mapping_size = mem::size_of::<crate::offset_format::PatternDataMapping>();
+
+    // Validate mappings are within buffer
+    if mappings_offset + mapping_count * mapping_size > buffer.len() {
+        return Err("Pattern data mappings extend beyond buffer".to_string());
+    }
+
+    let mut offsets = Vec::with_capacity(mapping_count);
+
+    // Read each PatternDataMapping and extract data_offset
+    for i in 0..mapping_count {
+        let mapping_offset = mappings_offset + i * mapping_size;
+        let mapping_bytes = &buffer[mapping_offset..];
+
+        let (mapping, _) = crate::offset_format::PatternDataMapping::read_from_prefix(
+            mapping_bytes,
+        )
+        .map_err(|_| {
+            format!(
+                "Failed to read PatternDataMapping at offset {}",
+                mapping_offset
+            )
+        })?;
+
+        // Extract just the data_offset field (the yield value)
+        offsets.push(mapping.data_offset);
+    }
+
+    Ok(offsets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +475,20 @@ mod tests {
         let result = validate_patterns(&buffer, 0, 1);
         assert!(!result.is_valid());
         assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn test_get_pattern_data_offsets_no_mappings() {
+        // Create a minimal valid header with no data section
+        let mut buffer = vec![0u8; mem::size_of::<crate::offset_format::ParaglobHeader>()];
+        let magic = b"PARAGLOB";
+        buffer[..8].copy_from_slice(magic);
+
+        let header = crate::offset_format::ParaglobHeader::read_from_prefix(&buffer)
+            .unwrap()
+            .0;
+        let result = get_pattern_data_offsets(&buffer, &header);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
     }
 }

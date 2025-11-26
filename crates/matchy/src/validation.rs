@@ -898,10 +898,24 @@ fn validate_paraglob_section(
     report.stats.has_ac_literal_mapping = header.has_ac_literal_mapping();
 
     // Validate AC automaton structure
+    // Extract the AC buffer slice - AC nodes, edges, and patterns are stored sequentially
+    // and all offsets within AC are relative to where the nodes start.
+    // Pass everything from nodes_offset to end of paraglob (edges/patterns follow nodes).
+    let ac_offset = header.ac_nodes_offset as usize;
+    if ac_offset > paraglob_data.len() {
+        report.error(format!(
+            "AC nodes offset beyond PARAGLOB: offset={}, paraglob_len={}",
+            ac_offset,
+            paraglob_data.len()
+        ));
+        return Ok(());
+    }
+    let ac_buffer = &paraglob_data[ac_offset..];
+
     let is_strict = level == ValidationLevel::Strict;
     let ac_result = matchy_ac::validate_ac_structure(
-        paraglob_data,
-        header.ac_nodes_offset as usize,
+        ac_buffer, // AC buffer slice starting at nodes (offsets relative to this)
+        0,         // Nodes start at offset 0 of this slice
         header.ac_node_count as usize,
         header.pattern_count,
         is_strict,
@@ -940,6 +954,81 @@ fn validate_paraglob_section(
     // PARAGLOB consistency checks in strict mode
     if level == ValidationLevel::Strict {
         validate_paraglob_consistency(paraglob_data, &header, report, level)?;
+    }
+
+    // Cross-component validation: Check pattern data offsets point to valid MMDB data
+    // This validates the external references from PARAGLOB to MMDB data section
+    if header.has_data_section() && header.mapping_count > 0 {
+        // Read header as paraglob type (there are two ParaglobHeader types - one in format, one in paraglob)
+        // TODO: Fix duplication per architectural notebooks
+        let paraglob_header =
+            matchy_paraglob::offset_format::ParaglobHeader::read_from_prefix(paraglob_data)
+                .map(|(h, _)| h)
+                .map_err(|_| {
+                    MatchyError::Paraglob(ParaglobError::Format(
+                        "Failed to read paraglob header".to_string(),
+                    ))
+                })?;
+
+        // Get the data offsets that PARAGLOB is referencing
+        match matchy_paraglob::get_pattern_data_offsets(paraglob_data, &paraglob_header) {
+            Ok(data_offsets) => {
+                // Calculate where MMDB data section starts
+                // It's after: IP tree + 16-byte separator
+                if let Ok(metadata) = crate::mmdb::MmdbMetadata::from_file(buffer) {
+                    if let Ok(crate::DataValue::Map(map)) = metadata.as_value() {
+                        if let Some(crate::DataValue::Uint32(node_count)) = map.get("node_count") {
+                            let record_size = map
+                                .get("record_size")
+                                .and_then(|v| match v {
+                                    crate::DataValue::Uint16(n) => Some(*n),
+                                    crate::DataValue::Uint32(n) => Some(*n as u16),
+                                    _ => None,
+                                })
+                                .unwrap_or(24);
+
+                            let node_bytes = match record_size {
+                                24 => 6,
+                                28 => 7,
+                                32 => 8,
+                                _ => 6,
+                            };
+                            let tree_size = (*node_count as usize) * node_bytes;
+                            let data_section_start = tree_size + 16; // After tree + separator
+
+                            // Validate each data offset
+                            for offset in data_offsets {
+                                if offset == 0 {
+                                    // 0 is valid (means no data for this pattern)
+                                    continue;
+                                }
+
+                                let offset = offset as usize;
+                                if offset < data_section_start {
+                                    report.error(format!(
+                                        "Pattern data offset {} points before data section (starts at {})",
+                                        offset, data_section_start
+                                    ));
+                                } else if offset >= buffer.len() {
+                                    report.error(format!(
+                                        "Pattern data offset {} exceeds file size {}",
+                                        offset,
+                                        buffer.len()
+                                    ));
+                                }
+                                // Note: We don't validate the offset is within data section end
+                                // because we'd need to parse MMDB data structures to know where
+                                // pattern section starts. Just checking it's after data section
+                                // start and before file end is sufficient.
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                report.error(format!("Failed to extract pattern data offsets: {}", e));
+            }
+        }
     }
 
     Ok(())
@@ -1057,10 +1146,23 @@ fn validate_paraglob_consistency(
 
     report.info("Running PARAGLOB consistency checks...");
 
+    // Extract AC buffer slice for consistency checks
+    // AC offsets are relative to where AC nodes start
+    let ac_offset = header.ac_nodes_offset as usize;
+    if ac_offset > buffer.len() {
+        report.error(format!(
+            "AC nodes offset beyond PARAGLOB in consistency check: offset={}, paraglob_len={}",
+            ac_offset,
+            buffer.len()
+        ));
+        return Ok(());
+    }
+    let ac_buffer = &buffer[ac_offset..];
+
     // 1. Check for orphan AC nodes
     let ac_reach_result = matchy_ac::validate_ac_reachability(
-        buffer,
-        header.ac_nodes_offset as usize,
+        ac_buffer, // AC buffer slice, not full paraglob
+        0,         // Nodes at offset 0 of AC buffer
         header.ac_node_count as usize,
     );
     report.errors.extend(ac_reach_result.errors);
@@ -1081,8 +1183,8 @@ fn validate_paraglob_consistency(
         header.pattern_count as usize,
     )?;
     let pattern_ref_result = matchy_ac::validate_pattern_references(
-        buffer,
-        header.ac_nodes_offset as usize,
+        ac_buffer, // AC buffer slice, not full paraglob
+        0,         // Nodes at offset 0 of AC buffer
         header.ac_node_count as usize,
         header.pattern_count,
         Some(&pattern_info),
