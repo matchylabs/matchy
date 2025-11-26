@@ -42,11 +42,11 @@
 
 use crate::extractor::{ExtractedItem, Extractor, HashType};
 use crate::{Database, QueryResult};
+use crossbeam_channel::{unbounded, Sender};
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1088,11 +1088,9 @@ where
     // Two-queue architecture for dynamic work distribution:
     // 1. file_queue: Files that need chunking (readers pull from here)
     // 2. work_queue: Work units ready to process (workers pull from here)
-    let (file_sender, file_receiver) = channel::<PathBuf>();
-    let file_receiver = Arc::new(Mutex::new(file_receiver));
-
-    let (work_sender, work_receiver) = channel::<WorkUnit>();
-    let work_receiver = Arc::new(Mutex::new(work_receiver));
+    // Using crossbeam-channel for lock-free MPMC (receivers are clonable)
+    let (file_sender, file_receiver) = unbounded::<PathBuf>();
+    let (work_sender, work_receiver) = unbounded::<WorkUnit>();
 
     // Wrap factory and progress callback in Arc for sharing across threads
     let worker_factory = Arc::new(create_worker);
@@ -1110,20 +1108,15 @@ where
     let mut reader_handles = Vec::new();
     if num_readers > 0 {
         for _reader_id in 0..num_readers {
-            let file_rx = Arc::clone(&file_receiver);
+            let file_rx = file_receiver.clone();
             let work_tx = work_sender.clone();
             let state = Arc::clone(&system_state);
 
             let handle = thread::spawn(move || {
                 // Pull files from queue and chunk them
-                loop {
-                    let file_path = match file_rx.lock().unwrap().recv() {
-                        Ok(path) => {
-                            state.dec_reader_queue(); // File removed from queue
-                            path
-                        }
-                        Err(_) => break, // File queue closed
-                    };
+                // crossbeam-channel receivers are clonable, no mutex needed
+                while let Ok(file_path) = file_rx.recv() {
+                    state.dec_reader_queue(); // File removed from queue
 
                     // Chunk this file and send chunks to work queue
                     if let Err(e) = reader_thread_chunker(file_path, &work_tx) {
@@ -1141,7 +1134,7 @@ where
     // Workers pull work units from work_queue and process them
     let mut worker_handles = Vec::new();
     for worker_id in 0..num_workers {
-        let receiver = Arc::clone(&work_receiver);
+        let receiver = work_receiver.clone();
         let factory = Arc::clone(&worker_factory);
         let state = Arc::clone(&system_state);
 
@@ -1163,14 +1156,9 @@ where
             let progress_interval = std::time::Duration::from_millis(100);
 
             // Process work units until channel closes
-            loop {
-                let unit = match receiver.lock().unwrap().recv() {
-                    Ok(u) => {
-                        state.dec_worker_queue(); // Work unit removed from queue
-                        u
-                    }
-                    Err(_) => break, // Channel closed
-                };
+            // crossbeam-channel receivers are clonable, no mutex needed
+            while let Ok(unit) = receiver.recv() {
+                state.dec_worker_queue(); // Work unit removed from queue
 
                 match process_work_unit_with_worker(&unit, &mut worker) {
                     Ok(matches) => {
@@ -1798,5 +1786,212 @@ mod tests {
             files_to_chunk, 1,
             "Should chunk exactly 1 file (the outlier)"
         );
+    }
+
+    #[test]
+    fn test_worker_process_bytes() {
+        use crate::extractor::Extractor;
+        use crate::{DatabaseBuilder, MatchMode};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // Create a simple database with one IP
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+        let mut data = HashMap::new();
+        data.insert(
+            "type".to_string(),
+            crate::DataValue::String("threat".to_string()),
+        );
+        builder.add_ip("1.2.3.4", data).unwrap();
+
+        let db_bytes = builder.build().unwrap();
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(&db_bytes).unwrap();
+        tmpfile.flush().unwrap();
+
+        let db = crate::Database::from(tmpfile.path().to_str().unwrap())
+            .open()
+            .unwrap();
+        let extractor = Extractor::new().unwrap();
+
+        let mut worker = Worker::builder()
+            .extractor(extractor)
+            .add_database("test", Arc::new(db))
+            .build();
+
+        // Process bytes containing an IP
+        let input = b"Connection from 1.2.3.4 detected";
+        let matches = worker.process_bytes(input).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched_text, "1.2.3.4");
+        assert_eq!(matches[0].match_type, "IPv4");
+
+        // Check stats
+        let stats = worker.stats();
+        assert_eq!(stats.matches_found, 1);
+        assert!(stats.candidates_tested > 0);
+    }
+
+    #[test]
+    fn test_worker_process_batch() {
+        use crate::extractor::Extractor;
+        use crate::{DatabaseBuilder, MatchMode};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // Create a database with multiple entries
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+        let data = HashMap::new();
+        builder.add_ip("8.8.8.8", data.clone()).unwrap();
+        builder.add_literal("evil.com", data).unwrap();
+
+        let db_bytes = builder.build().unwrap();
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(&db_bytes).unwrap();
+        tmpfile.flush().unwrap();
+
+        let db = crate::Database::from(tmpfile.path().to_str().unwrap())
+            .open()
+            .unwrap();
+        let extractor = Extractor::new().unwrap();
+
+        let mut worker = Worker::builder()
+            .extractor(extractor)
+            .add_database("test", Arc::new(db))
+            .build();
+
+        // Create a batch
+        let batch = DataBatch {
+            source: PathBuf::from("test.log"),
+            data: Arc::new(b"DNS query to evil.com from 8.8.8.8".to_vec()),
+        };
+
+        let matches = worker.process_batch(&batch).unwrap();
+
+        // Should find both matches
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|m| m.matched_text == "8.8.8.8"));
+        assert!(matches.iter().any(|m| m.matched_text == "evil.com"));
+
+        // Source path should be set
+        for m in &matches {
+            assert_eq!(m.source, PathBuf::from("test.log"));
+        }
+    }
+
+    #[test]
+    fn test_process_files_parallel_basic() {
+        use crate::extractor::Extractor;
+        use crate::{DatabaseBuilder, MatchMode};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // Create a simple database
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+        let data = HashMap::new();
+        builder.add_ip("192.168.1.1", data).unwrap();
+
+        let db_bytes = builder.build().unwrap();
+        let mut db_file = NamedTempFile::new().unwrap();
+        db_file.write_all(&db_bytes).unwrap();
+        db_file.flush().unwrap();
+        let db_path = db_file.path().to_path_buf();
+
+        // Create test file with content
+        let mut test_file = NamedTempFile::new().unwrap();
+        writeln!(test_file, "Connection from 192.168.1.1").unwrap();
+        writeln!(test_file, "Another line").unwrap();
+        test_file.flush().unwrap();
+
+        let files = vec![test_file.path().to_path_buf()];
+
+        // Process files in parallel
+        let result = process_files_parallel(
+            files,
+            Some(1), // 1 reader
+            Some(2), // 2 workers
+            move || {
+                let db = crate::Database::from(db_path.to_str().unwrap())
+                    .open()
+                    .map_err(|e| e.to_string())?;
+                let extractor = Extractor::new().map_err(|e| e.to_string())?;
+                Ok(Worker::builder()
+                    .extractor(extractor)
+                    .add_database("test", Arc::new(db))
+                    .build())
+            },
+            None::<fn(&WorkerStats)>,
+            false,
+        )
+        .unwrap();
+
+        // Should find the IP match
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].matched_text, "192.168.1.1");
+    }
+
+    #[test]
+    fn test_process_files_parallel_multiple_files() {
+        use crate::extractor::Extractor;
+        use crate::{DatabaseBuilder, MatchMode};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        // Create a database with multiple IPs
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+        let data = HashMap::new();
+        builder.add_ip("10.0.0.1", data.clone()).unwrap();
+        builder.add_ip("10.0.0.2", data).unwrap();
+
+        let db_bytes = builder.build().unwrap();
+        let mut db_file = NamedTempFile::new().unwrap();
+        db_file.write_all(&db_bytes).unwrap();
+        db_file.flush().unwrap();
+        let db_path = db_file.path().to_path_buf();
+
+        // Create multiple test files
+        let mut file1 = NamedTempFile::new().unwrap();
+        writeln!(file1, "IP: 10.0.0.1").unwrap();
+        file1.flush().unwrap();
+
+        let mut file2 = NamedTempFile::new().unwrap();
+        writeln!(file2, "IP: 10.0.0.2").unwrap();
+        file2.flush().unwrap();
+
+        let files = vec![file1.path().to_path_buf(), file2.path().to_path_buf()];
+
+        // Process with multiple workers
+        let result = process_files_parallel(
+            files,
+            Some(0), // No readers (files go direct to workers)
+            Some(4), // 4 workers
+            move || {
+                let db = crate::Database::from(db_path.to_str().unwrap())
+                    .open()
+                    .map_err(|e| e.to_string())?;
+                let extractor = Extractor::new().map_err(|e| e.to_string())?;
+                Ok(Worker::builder()
+                    .extractor(extractor)
+                    .add_database("test", Arc::new(db))
+                    .build())
+            },
+            None::<fn(&WorkerStats)>,
+            false,
+        )
+        .unwrap();
+
+        // Should find both IPs
+        assert_eq!(result.matches.len(), 2);
+        let matched_texts: Vec<&str> = result
+            .matches
+            .iter()
+            .map(|m| m.matched_text.as_str())
+            .collect();
+        assert!(matched_texts.contains(&"10.0.0.1"));
+        assert!(matched_texts.contains(&"10.0.0.2"));
+
+        // Verify routing stats
+        assert_eq!(result.routing_stats.total_files(), 2);
     }
 }
