@@ -684,3 +684,176 @@ pub fn cmd_match(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_is_source_file_json() {
+        assert_eq!(is_source_file(Path::new("test.json")), Some("json"));
+        assert_eq!(is_source_file(Path::new("test.JSON")), Some("json"));
+        assert_eq!(
+            is_source_file(Path::new("/path/to/file.Json")),
+            Some("json")
+        );
+    }
+
+    #[test]
+    fn test_is_source_file_csv() {
+        assert_eq!(is_source_file(Path::new("test.csv")), Some("csv"));
+        assert_eq!(is_source_file(Path::new("test.CSV")), Some("csv"));
+        assert_eq!(is_source_file(Path::new("/path/to/file.Csv")), Some("csv"));
+    }
+
+    #[test]
+    fn test_is_source_file_other() {
+        assert_eq!(is_source_file(Path::new("test.mxy")), None);
+        assert_eq!(is_source_file(Path::new("test.txt")), None);
+        assert_eq!(is_source_file(Path::new("test")), None);
+        assert_eq!(is_source_file(Path::new("")), None);
+    }
+
+    #[test]
+    fn test_build_database_from_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[
+            {"key": "192.168.1.0/24", "data": {"type": "internal"}},
+            {"key": "*.malware.com", "data": {"severity": "high"}},
+            {"key": "evil.com"}
+        ]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_ok(), "Should build database from JSON");
+        let db_bytes = result.unwrap();
+        assert!(!db_bytes.is_empty(), "Database should not be empty");
+    }
+
+    #[test]
+    fn test_build_database_from_json_with_stats() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[{"key": "test.com"}]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        // Should not panic with stats enabled
+        let result = build_database_from_source(&json_path, "json", true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_database_from_json_missing_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[{"data": {"type": "internal"}}]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_err(), "Should fail without 'key' field");
+        assert!(result.unwrap_err().to_string().contains("key"));
+    }
+
+    #[test]
+    fn test_build_database_from_json_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        fs::write(&json_path, "{ not valid json }").unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_err(), "Should fail on invalid JSON");
+    }
+
+    #[test]
+    fn test_build_database_from_csv() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        let csv_content =
+            "key,type,severity\n192.168.1.0/24,internal,low\n*.malware.com,malware,high\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should build database from CSV");
+        let db_bytes = result.unwrap();
+        assert!(!db_bytes.is_empty(), "Database should not be empty");
+    }
+
+    #[test]
+    fn test_build_database_from_csv_entry_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        // Using 'entry' instead of 'key'
+        let csv_content = "entry,type\ntest.com,phishing\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should accept 'entry' column");
+    }
+
+    #[test]
+    fn test_build_database_from_csv_missing_key_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        let csv_content = "type,severity\nmalware,high\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(
+            result.is_err(),
+            "Should fail without 'key' or 'entry' column"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("entry") || err.contains("key"));
+    }
+
+    #[test]
+    fn test_build_database_from_csv_numeric_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        // Test various data types in CSV
+        let csv_content = "key,count,score,active\ntest.com,42,3.14,true\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should handle numeric and boolean values");
+    }
+
+    #[test]
+    fn test_build_database_from_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let txt_path = temp_dir.path().join("test.txt");
+
+        let txt_content = "192.168.1.0/24\n*.malware.com\n# comment\n\nevil.com\n";
+        fs::write(&txt_path, txt_content).unwrap();
+
+        let result = build_database_from_source(&txt_path, "text", false);
+        assert!(result.is_ok(), "Should build database from text file");
+    }
+
+    #[test]
+    fn test_build_database_unknown_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.xyz");
+        fs::write(&path, "test").unwrap();
+
+        let result = build_database_from_source(&path, "xyz", false);
+        assert!(result.is_err(), "Should fail on unknown format");
+        assert!(result.unwrap_err().to_string().contains("Unknown format"));
+    }
+
+    #[test]
+    fn test_build_database_file_not_found() {
+        let result = build_database_from_source(Path::new("/nonexistent/file.json"), "json", false);
+        assert!(result.is_err(), "Should fail on missing file");
+    }
+}
