@@ -927,7 +927,9 @@ fn validate_paraglob_section(
     if header.pattern_count > 0 {
         report.info(format!(
             "Patterns: {} total ({} literal, {} glob)",
-            header.pattern_count, pattern_result.stats.literal_count, pattern_result.stats.glob_count
+            header.pattern_count,
+            pattern_result.stats.literal_count,
+            pattern_result.stats.glob_count
         ));
     }
 
@@ -1038,13 +1040,6 @@ fn validate_paraglob_header(buffer: &[u8], report: &mut ValidationReport) -> Res
     }
 
     Ok(())
-}
-
-/// Validate that a range is within bounds
-fn validate_range(offset: usize, size: usize, buffer_len: usize) -> bool {
-    offset
-        .checked_add(size)
-        .is_some_and(|end| end <= buffer_len)
 }
 
 /// Validate PARAGLOB consistency - checks for data structure integrity issues
@@ -1228,33 +1223,39 @@ fn validate_data_section_pointers(
                         pointers_checked += visited.len();
                         max_depth_found = max_depth_found.max(depth);
                     }
-                    Err(e) => {
-                        match e {
-                            matchy_data_format::PointerValidationError::Cycle { offset } => {
-                                cycles_detected += 1;
-                                report.error(format!(
-                                    "Pointer cycle detected in data section at offset {}",
-                                    offset
-                                ));
-                            }
-                            matchy_data_format::PointerValidationError::DepthExceeded { depth } => {
-                                report.error(format!(
-                                    "Pointer chain depth {} exceeds safe limit (max: {})",
-                                    depth, matchy_data_format::MAX_POINTER_DEPTH
-                                ));
-                            }
-                            matchy_data_format::PointerValidationError::InvalidOffset { offset, reason } => {
-                                invalid_pointers += 1;
-                                report.error(format!("Invalid pointer at offset {}: {}", offset, reason));
-                            }
-                            matchy_data_format::PointerValidationError::InvalidType { offset, type_id } => {
-                                report.error(format!(
-                                    "Invalid data type {} at offset {}",
-                                    type_id, offset
-                                ));
-                            }
+                    Err(e) => match e {
+                        matchy_data_format::PointerValidationError::Cycle { offset } => {
+                            cycles_detected += 1;
+                            report.error(format!(
+                                "Pointer cycle detected in data section at offset {}",
+                                offset
+                            ));
                         }
-                    }
+                        matchy_data_format::PointerValidationError::DepthExceeded { depth } => {
+                            report.error(format!(
+                                "Pointer chain depth {} exceeds safe limit (max: {})",
+                                depth,
+                                matchy_data_format::MAX_POINTER_DEPTH
+                            ));
+                        }
+                        matchy_data_format::PointerValidationError::InvalidOffset {
+                            offset,
+                            reason,
+                        } => {
+                            invalid_pointers += 1;
+                            report
+                                .error(format!("Invalid pointer at offset {}: {}", offset, reason));
+                        }
+                        matchy_data_format::PointerValidationError::InvalidType {
+                            offset,
+                            type_id,
+                        } => {
+                            report.error(format!(
+                                "Invalid data type {} at offset {}",
+                                type_id, offset
+                            ));
+                        }
+                    },
                 }
             }
         }
@@ -1332,15 +1333,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_levels() {
-        // Test that validation levels are distinct
-        let standard = ValidationLevel::Standard;
-        let strict = ValidationLevel::Strict;
-
-        assert_ne!(standard, strict);
-    }
-
-    #[test]
     fn test_validation_report_is_valid() {
         let mut report = ValidationReport::new();
         assert!(report.is_valid(), "New report should be valid");
@@ -1365,23 +1357,6 @@ mod tests {
         assert_eq!(stats.pattern_count, 0);
         assert!(!stats.has_data_section);
         assert!(!stats.has_ac_literal_mapping);
-    }
-
-    #[test]
-    fn test_validate_range() {
-        // Valid range
-        assert!(validate_range(0, 100, 1000));
-        assert!(validate_range(900, 100, 1000));
-
-        // Exactly at boundary
-        assert!(validate_range(0, 1000, 1000));
-
-        // Out of bounds
-        assert!(!validate_range(0, 1001, 1000));
-        assert!(!validate_range(900, 101, 1000));
-
-        // Overflow protection
-        assert!(!validate_range(usize::MAX - 10, 100, 1000));
     }
 
     #[test]

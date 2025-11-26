@@ -178,7 +178,6 @@ pub struct ParaglobHeader {
     pub glob_segments_size: u32,
 }
 
-
 /// Pattern-to-data mapping entry (12 bytes, 4-byte aligned)
 ///
 /// Maps a pattern ID to associated data. Used in v2 format.
@@ -397,7 +396,6 @@ impl ParaglobHeader {
         self.glob_segments_size > 0 && self.glob_segments_offset > 0
     }
 }
-
 
 /// Helper to safely read a struct from a byte buffer at an offset
 ///

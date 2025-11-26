@@ -92,18 +92,14 @@ pub fn validate_ac_structure(
         let node_offset = nodes_offset + i * mem::size_of::<ACNodeHot>();
 
         if node_offset + mem::size_of::<ACNodeHot>() > buffer.len() {
-            result
-                .errors
-                .push(format!("AC node {} out of bounds", i));
+            result.errors.push(format!("AC node {} out of bounds", i));
             continue;
         }
 
         let node = match ACNodeHot::read_from_prefix(&buffer[node_offset..]) {
             Ok((n, _)) => n,
             Err(_) => {
-                result
-                    .errors
-                    .push(format!("Failed to read AC node {}", i));
+                result.errors.push(format!("Failed to read AC node {}", i));
                 continue;
             }
         };

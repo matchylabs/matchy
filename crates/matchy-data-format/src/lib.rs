@@ -34,8 +34,8 @@ mod validation;
 pub use validation::{
     validate_data_section, validate_data_value_pointers, validate_data_value_utf8,
     validate_value_strings_utf8, DataFormatStats, DataFormatValidationResult,
-    PointerValidationError, PointerValidationResult, PointerValidationStats,
-    MAX_POINTER_DEPTH, MAX_TOTAL_DEPTH,
+    PointerValidationError, PointerValidationResult, PointerValidationStats, MAX_POINTER_DEPTH,
+    MAX_TOTAL_DEPTH,
 };
 
 /// Data value that can be stored in the data section

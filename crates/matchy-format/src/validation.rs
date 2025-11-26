@@ -3,7 +3,7 @@
 //! Provides validation of pattern-to-data mappings and other format-level
 //! consistency checks.
 
-use crate::{PatternDataMapping, ParaglobHeader};
+use crate::{ParaglobHeader, PatternDataMapping};
 use std::collections::HashSet;
 use zerocopy::FromBytes;
 
@@ -283,8 +283,8 @@ mod tests {
 
         // Write mappings with out-of-bounds data
         let mappings = vec![
-            encode_mapping(0, 5100, 50),   // Valid
-            encode_mapping(1, 5900, 200),  // Exceeds data section (5000 + 1000 = 6000)
+            encode_mapping(0, 5100, 50),  // Valid
+            encode_mapping(1, 5900, 200), // Exceeds data section (5000 + 1000 = 6000)
         ];
 
         let mut offset = 1000;

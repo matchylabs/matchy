@@ -130,13 +130,8 @@ pub mod simd_utils;
 /// Database validation for untrusted files
 ///
 /// Provides comprehensive validation of `.mxy` database files including:
-/// - **Basic**: Magic bytes, version, critical offsets
 /// - **Standard**: All offsets, UTF-8 validation, basic structure
 /// - **Strict**: Deep graph analysis, cycles, redundancy checks
-/// - **Audit**: Tracks all unsafe code paths and trust assumptions
-///
-/// Use [`validation::ValidationLevel::Audit`] to see where unsafe operations
-/// occur and what validation would be bypassed in `--trusted` mode.
 pub mod validation;
 
 // Public C API

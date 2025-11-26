@@ -121,7 +121,7 @@ pub fn validate_value_strings_utf8(value: &DataValue) -> Result<u32, String> {
             count += 1;
         }
         DataValue::Map(map) => {
-            for (_key, val) in map {
+            for val in map.values() {
                 // Map keys are always strings, and already validated
                 count += 1;
                 // Recursively validate values
@@ -331,8 +331,6 @@ pub fn validate_data_value_pointers(
     visited: &mut std::collections::HashSet<usize>,
     depth: usize,
 ) -> Result<usize, PointerValidationError> {
-    use std::collections::HashSet;
-
     // Check depth limit
     if depth > MAX_TOTAL_DEPTH {
         return Err(PointerValidationError::DepthExceeded { depth });
@@ -379,12 +377,8 @@ pub fn validate_data_value_pointers(
                     // Array - validate all elements
                     let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
                     for _ in 0..count {
-                        let child_depth = validate_data_value_pointers(
-                            data_section,
-                            cursor,
-                            visited,
-                            depth + 1,
-                        )?;
+                        let child_depth =
+                            validate_data_value_pointers(data_section, cursor, visited, depth + 1)?;
                         max_child_depth = max_child_depth.max(child_depth);
                         cursor = skip_data_value(data_section, cursor)?;
                     }
@@ -413,12 +407,8 @@ pub fn validate_data_value_pointers(
             }
 
             // Recursively validate pointed-to value
-            let child_depth = validate_data_value_pointers(
-                data_section,
-                pointer_offset,
-                visited,
-                depth + 1,
-            )?;
+            let child_depth =
+                validate_data_value_pointers(data_section, pointer_offset, visited, depth + 1)?;
             max_child_depth = max_child_depth.max(child_depth);
         }
         2..=6 => {
@@ -431,12 +421,8 @@ pub fn validate_data_value_pointers(
                 // Skip key
                 cursor = skip_data_value(data_section, cursor)?;
                 // Validate value
-                let child_depth = validate_data_value_pointers(
-                    data_section,
-                    cursor,
-                    visited,
-                    depth + 1,
-                )?;
+                let child_depth =
+                    validate_data_value_pointers(data_section, cursor, visited, depth + 1)?;
                 max_child_depth = max_child_depth.max(child_depth);
                 cursor = skip_data_value(data_section, cursor)?;
             }
