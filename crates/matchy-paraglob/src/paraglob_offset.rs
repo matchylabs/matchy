@@ -189,9 +189,10 @@ impl PatternType {
 /// building the final Paraglob instance.
 ///
 /// # Example
-/// ```ignore
-/// use matchy::bench_api::ParaglobBuilder;
-/// use matchy::{data_section::DataValue, MatchMode};
+/// ```
+/// use matchy_paraglob::ParaglobBuilder;
+/// use matchy_data_format::DataValue;
+/// use matchy_match_mode::MatchMode;
 /// use std::collections::HashMap;
 ///
 /// let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
@@ -206,8 +207,9 @@ impl PatternType {
 /// builder.add_pattern_with_data("*.evil.com", Some(DataValue::Map(threat_data))).unwrap();
 ///
 /// // Build the final matcher
-/// let mut pg = builder.build().unwrap();
+/// let pg = builder.build().unwrap();
 /// let matches = pg.find_all("test_file.txt");
+/// assert!(!matches.is_empty());
 /// ```
 pub struct ParaglobBuilder {
     patterns: Vec<PatternType>,
@@ -258,9 +260,10 @@ impl ParaglobBuilder {
     /// The assigned pattern ID
     ///
     /// # Example
-    /// ```ignore
-    /// use matchy::bench_api::ParaglobBuilder;
-    /// use matchy::{data_section::DataValue, MatchMode};
+    /// ```
+    /// use matchy_paraglob::ParaglobBuilder;
+    /// use matchy_data_format::DataValue;
+    /// use matchy_match_mode::MatchMode;
     /// use std::collections::HashMap;
     ///
     /// let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
@@ -273,6 +276,7 @@ impl ParaglobBuilder {
     ///     "*.malware.com",
     ///     Some(DataValue::Map(threat_info))
     /// ).unwrap();
+    /// assert_eq!(pattern_id, 0);
     /// ```
     pub fn add_pattern_with_data(
         &mut self,
@@ -987,9 +991,10 @@ impl Paraglob {
     /// * `mode` - Match mode (case sensitive/insensitive)
     ///
     /// # Example
-    /// ```ignore
-    /// use matchy::bench_api::Paraglob;
-    /// use matchy::{data_section::DataValue, MatchMode};
+    /// ```
+    /// use matchy_paraglob::Paraglob;
+    /// use matchy_data_format::DataValue;
+    /// use matchy_match_mode::MatchMode;
     /// use std::collections::HashMap;
     ///
     /// let patterns = vec!["*.evil.com", "malware.*"];
@@ -1006,6 +1011,7 @@ impl Paraglob {
     ///     Some(&data_values),
     ///     MatchMode::CaseSensitive
     /// ).unwrap();
+    /// assert_eq!(pg.pattern_count(), 2);
     /// ```
     pub fn build_from_patterns_with_data(
         patterns: &[&str],
