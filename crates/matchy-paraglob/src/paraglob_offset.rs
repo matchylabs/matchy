@@ -1250,10 +1250,6 @@ impl Paraglob {
             if node.pattern_count > 0 {
                 let patterns_offset = node.patterns_offset as usize;
                 let pattern_count = node.pattern_count as usize;
-                eprintln!(
-                    "  AC node at offset {} has {} patterns at offset {}",
-                    current_offset, pattern_count, patterns_offset
-                );
 
                 // SAFETY: Read u32 array directly - HOT PATH (4-byte aligned)
                 unsafe {
@@ -1261,10 +1257,6 @@ impl Paraglob {
                         let ids_ptr = ac_buffer.as_ptr().add(patterns_offset) as *const u32;
                         for i in 0..pattern_count {
                             let pattern_id = ids_ptr.add(i).read();
-                            eprintln!(
-                                "    AC found pattern_id={} at patterns_offset={}",
-                                pattern_id, patterns_offset
-                            );
                             matches.insert(pattern_id);
                         }
                     }
@@ -1376,15 +1368,9 @@ impl Paraglob {
         mode: MatchMode,
         glob_segments_offset: usize,
     ) -> Result<bool, ParaglobError> {
-        eprintln!(
-            "match_glob_from_buffer: pattern_id={}, text={}, glob_segments_offset={}",
-            pattern_id, text, glob_segments_offset
-        );
-
         // Read GlobSegmentIndex for this pattern
         let index_offset =
             glob_segments_offset + (pattern_id as usize) * mem::size_of::<GlobSegmentIndex>();
-        eprintln!("  index_offset={}", index_offset);
 
         if index_offset + mem::size_of::<GlobSegmentIndex>() > buffer.len() {
             return Ok(false); // Invalid index, treat as no match

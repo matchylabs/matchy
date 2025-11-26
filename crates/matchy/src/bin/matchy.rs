@@ -80,7 +80,9 @@ enum Commands {
 
     /// Match patterns against log files or stdin (operational testing)
     Match {
-        /// Path to the matchy database (.mxy file)
+        /// Path to the matchy database (.mxy file, or .json/.csv source file)
+        /// When a JSON or CSV file is provided, matchy will automatically build
+        /// the database in-memory before matching.
         #[arg(value_name = "DATABASE")]
         database: PathBuf,
 

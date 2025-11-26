@@ -107,6 +107,9 @@ matchy match threats.mxy access.log.gz
 
 # Watch live logs
 tail -f /var/log/app.log | matchy match threats.mxy -
+
+# Quick testing: skip the build step (auto-builds from JSON/CSV)
+matchy match threats.json access.log  # builds database in-memory
 ```
 
 ### Query Individual Indicators

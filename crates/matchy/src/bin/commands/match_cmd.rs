@@ -1,16 +1,174 @@
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, BufRead};
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use std::time::Instant;
 
-use crate::cli_utils::{format_number, format_qps};
+use crate::cli_utils::{format_number, format_qps, json_to_data_map};
 use crate::match_processor::{
     analyze_performance, follow_files, follow_files_parallel, process_file_with_aggregate,
     process_parallel, ProcessingStats,
 };
+use matchy::{mmdb_builder::DatabaseBuilder, DataValue, MatchMode};
+
+/// Check if the given path is a source file (JSON or CSV) that needs to be built
+fn is_source_file(path: &Path) -> Option<&'static str> {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| {
+            let ext_lower = ext.to_lowercase();
+            match ext_lower.as_str() {
+                "json" => Some("json"),
+                "csv" => Some("csv"),
+                _ => None,
+            }
+        })
+}
+
+/// Build a database in-memory from a source file (JSON or CSV)
+fn build_database_from_source(path: &Path, format: &str, show_stats: bool) -> Result<Vec<u8>> {
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+
+    match format {
+        "csv" => {
+            // Read entries with data from CSV file
+            let file = fs::File::open(path)
+                .with_context(|| format!("Failed to open CSV file: {}", path.display()))?;
+            let mut reader = csv::Reader::from_reader(file);
+
+            // Get headers
+            let headers = reader.headers().context("Failed to read CSV headers")?;
+
+            // Find the entry column (try "entry" or "key")
+            let entry_col = headers
+                .iter()
+                .position(|h| h == "entry" || h == "key")
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "CSV must have an 'entry' or 'key' column. Found headers: {}",
+                        headers.iter().collect::<Vec<_>>().join(", ")
+                    )
+                })?;
+
+            // Get other column names for metadata
+            let data_cols: Vec<(usize, String)> = headers
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != entry_col)
+                .map(|(i, name)| (i, name.to_string()))
+                .collect();
+
+            let mut total_entries = 0;
+
+            // Process each row
+            for (row_num, result) in reader.records().enumerate() {
+                let record = result.context("Failed to read CSV record")?;
+
+                // Get the entry value
+                let entry = record.get(entry_col).ok_or_else(|| {
+                    anyhow::anyhow!("Missing entry column at row {}", row_num + 2)
+                })?;
+
+                // Build data map from other columns
+                let mut data = HashMap::new();
+                for (col_idx, col_name) in &data_cols {
+                    if let Some(value) = record.get(*col_idx) {
+                        if !value.is_empty() {
+                            // Try to parse as number, otherwise treat as string
+                            let data_value = if let Ok(i) = value.parse::<i64>() {
+                                DataValue::Int32(i as i32)
+                            } else if let Ok(u) = value.parse::<u64>() {
+                                DataValue::Uint64(u)
+                            } else if let Ok(f) = value.parse::<f64>() {
+                                DataValue::Double(f)
+                            } else if value == "true" || value == "false" {
+                                DataValue::Bool(value == "true")
+                            } else {
+                                DataValue::String(value.to_string())
+                            };
+                            data.insert(col_name.clone(), data_value);
+                        }
+                    }
+                }
+
+                builder.add_entry(entry, data)?;
+                total_entries += 1;
+            }
+
+            if show_stats {
+                eprintln!("[INFO] Loaded {} entries from CSV", total_entries);
+            }
+        }
+        "json" => {
+            // Read entries with data from JSON file
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read JSON file: {}", path.display()))?;
+            let entries: Vec<serde_json::Value> =
+                serde_json::from_str(&content).context("Failed to parse JSON")?;
+
+            let mut total_entries = 0;
+
+            for (i, item) in entries.iter().enumerate() {
+                let key = item
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing 'key' field at index {}", i))?;
+
+                let data = if let Some(data_json) = item.get("data") {
+                    json_to_data_map(data_json)?
+                } else {
+                    HashMap::new()
+                };
+
+                builder.add_entry(key, data)?;
+                total_entries += 1;
+            }
+
+            if show_stats {
+                eprintln!("[INFO] Loaded {} entries from JSON", total_entries);
+            }
+        }
+        "text" => {
+            // Read entries from text file (one per line)
+            let file = fs::File::open(path)
+                .with_context(|| format!("Failed to open input file: {}", path.display()))?;
+            let reader = io::BufReader::new(file);
+
+            let mut total_entries = 0;
+            for line in reader.lines() {
+                let line = line?;
+                let entry = line.trim();
+                if !entry.is_empty() && !entry.starts_with('#') {
+                    builder.add_entry(entry, HashMap::new())?;
+                    total_entries += 1;
+                }
+            }
+
+            if show_stats {
+                eprintln!("[INFO] Loaded {} entries from text file", total_entries);
+            }
+        }
+        _ => {
+            anyhow::bail!("Unknown format: {}. Use 'json', 'csv', or 'text'", format);
+        }
+    }
+
+    // Show stats about what was loaded
+    if show_stats {
+        let stats = builder.stats();
+        eprintln!(
+            "[INFO] Database: {} IPs, {} literals, {} globs",
+            stats.ip_entries, stats.literal_entries, stats.glob_entries
+        );
+    }
+
+    builder.build().context("Failed to build database")
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_match(
@@ -57,22 +215,49 @@ pub fn cmd_match(
         }
     }
 
-    // Load database
+    // Load database - either from compiled .mxy file or build from source (JSON/CSV)
     let load_start = Instant::now();
-    let mut opener = Database::from(database.to_str().unwrap());
-    if cache_size == 0 {
-        opener = opener.no_cache();
+    let is_from_source = is_source_file(&database);
+
+    let db = if let Some(source_format) = is_from_source {
+        // Build database in-memory from source file
+        if show_stats {
+            eprintln!(
+                "[INFO] Building database from {} file...",
+                source_format.to_uppercase()
+            );
+        }
+        let db_bytes = build_database_from_source(&database, source_format, show_stats)?;
+        let mut opener = Database::from_bytes_builder(db_bytes);
+        if cache_size == 0 {
+            opener = opener.no_cache();
+        } else {
+            opener = opener.cache_capacity(cache_size);
+        }
+        opener
+            .open()
+            .with_context(|| format!("Failed to build database from: {}", database.display()))?
     } else {
-        opener = opener.cache_capacity(cache_size);
-    }
-    let db = opener
-        .open()
-        .with_context(|| format!("Failed to load database: {}", database.display()))?;
+        // Load from compiled database file
+        let mut opener = Database::from(database.to_str().unwrap());
+        if cache_size == 0 {
+            opener = opener.no_cache();
+        } else {
+            opener = opener.cache_capacity(cache_size);
+        }
+        opener
+            .open()
+            .with_context(|| format!("Failed to load database: {}", database.display()))?
+    };
     let load_time = load_start.elapsed();
 
     // Info messages to stderr
     if show_stats {
-        eprintln!("[INFO] Loaded database: {}", database.display());
+        if is_from_source.is_some() {
+            eprintln!("[INFO] Built database from: {}", database.display());
+        } else {
+            eprintln!("[INFO] Loaded database: {}", database.display());
+        }
         eprintln!("[INFO] Load time: {:.2}ms", load_time.as_millis());
         eprintln!(
             "[INFO] Cache: {}",
@@ -159,6 +344,9 @@ pub fn cmd_match(
         );
     }
 
+    // Wrap database in Arc for sharing across parallel workers
+    let db = Arc::new(db);
+
     // Setup Ctrl+C handler for follow mode
     let shutdown = Arc::new(AtomicBool::new(false));
     if follow {
@@ -207,12 +395,11 @@ pub fn cmd_match(
             }
             aggregate_stats = follow_files_parallel(
                 inputs.clone(),
-                &database,
+                Arc::clone(&db),
                 num_threads,
                 &format,
                 show_stats,
                 show_progress,
-                cache_size,
                 overall_start,
                 shutdown,
                 extractor_config,
@@ -244,14 +431,13 @@ pub fn cmd_match(
         // Parallel mode (num_threads=0 means auto-tune, >1 means explicit count)
         let (stats, workers, readers, rstats) = process_parallel(
             inputs.clone(),
-            &database,
+            Arc::clone(&db),
             num_threads,
             readers_arg,
             batch_bytes,
             &format,
             show_stats,
             show_progress,
-            cache_size,
             overall_start,
             extractor_config,
             debug_routing,
@@ -497,4 +683,177 @@ pub fn cmd_match(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_is_source_file_json() {
+        assert_eq!(is_source_file(Path::new("test.json")), Some("json"));
+        assert_eq!(is_source_file(Path::new("test.JSON")), Some("json"));
+        assert_eq!(
+            is_source_file(Path::new("/path/to/file.Json")),
+            Some("json")
+        );
+    }
+
+    #[test]
+    fn test_is_source_file_csv() {
+        assert_eq!(is_source_file(Path::new("test.csv")), Some("csv"));
+        assert_eq!(is_source_file(Path::new("test.CSV")), Some("csv"));
+        assert_eq!(is_source_file(Path::new("/path/to/file.Csv")), Some("csv"));
+    }
+
+    #[test]
+    fn test_is_source_file_other() {
+        assert_eq!(is_source_file(Path::new("test.mxy")), None);
+        assert_eq!(is_source_file(Path::new("test.txt")), None);
+        assert_eq!(is_source_file(Path::new("test")), None);
+        assert_eq!(is_source_file(Path::new("")), None);
+    }
+
+    #[test]
+    fn test_build_database_from_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[
+            {"key": "192.168.1.0/24", "data": {"type": "internal"}},
+            {"key": "*.malware.com", "data": {"severity": "high"}},
+            {"key": "evil.com"}
+        ]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_ok(), "Should build database from JSON");
+        let db_bytes = result.unwrap();
+        assert!(!db_bytes.is_empty(), "Database should not be empty");
+    }
+
+    #[test]
+    fn test_build_database_from_json_with_stats() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[{"key": "test.com"}]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        // Should not panic with stats enabled
+        let result = build_database_from_source(&json_path, "json", true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_build_database_from_json_missing_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let json_content = r#"[{"data": {"type": "internal"}}]"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_err(), "Should fail without 'key' field");
+        assert!(result.unwrap_err().to_string().contains("key"));
+    }
+
+    #[test]
+    fn test_build_database_from_json_invalid() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        fs::write(&json_path, "{ not valid json }").unwrap();
+
+        let result = build_database_from_source(&json_path, "json", false);
+        assert!(result.is_err(), "Should fail on invalid JSON");
+    }
+
+    #[test]
+    fn test_build_database_from_csv() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        let csv_content =
+            "key,type,severity\n192.168.1.0/24,internal,low\n*.malware.com,malware,high\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should build database from CSV");
+        let db_bytes = result.unwrap();
+        assert!(!db_bytes.is_empty(), "Database should not be empty");
+    }
+
+    #[test]
+    fn test_build_database_from_csv_entry_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        // Using 'entry' instead of 'key'
+        let csv_content = "entry,type\ntest.com,phishing\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should accept 'entry' column");
+    }
+
+    #[test]
+    fn test_build_database_from_csv_missing_key_column() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        let csv_content = "type,severity\nmalware,high\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(
+            result.is_err(),
+            "Should fail without 'key' or 'entry' column"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("entry") || err.contains("key"));
+    }
+
+    #[test]
+    fn test_build_database_from_csv_numeric_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        // Test various data types in CSV
+        let csv_content = "key,count,score,active\ntest.com,42,3.14,true\n";
+        fs::write(&csv_path, csv_content).unwrap();
+
+        let result = build_database_from_source(&csv_path, "csv", false);
+        assert!(result.is_ok(), "Should handle numeric and boolean values");
+    }
+
+    #[test]
+    fn test_build_database_from_text() {
+        let temp_dir = TempDir::new().unwrap();
+        let txt_path = temp_dir.path().join("test.txt");
+
+        let txt_content = "192.168.1.0/24\n*.malware.com\n# comment\n\nevil.com\n";
+        fs::write(&txt_path, txt_content).unwrap();
+
+        let result = build_database_from_source(&txt_path, "text", false);
+        assert!(result.is_ok(), "Should build database from text file");
+    }
+
+    #[test]
+    fn test_build_database_unknown_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.xyz");
+        fs::write(&path, "test").unwrap();
+
+        let result = build_database_from_source(&path, "xyz", false);
+        assert!(result.is_err(), "Should fail on unknown format");
+        assert!(result.unwrap_err().to_string().contains("Unknown format"));
+    }
+
+    #[test]
+    fn test_build_database_file_not_found() {
+        let result = build_database_from_source(Path::new("/nonexistent/file.json"), "json", false);
+        assert!(result.is_err(), "Should fail on missing file");
+    }
 }

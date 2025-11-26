@@ -23,7 +23,13 @@ The `matchy match` command processes log files or stdin, automatically extractin
 
 ### `<DATABASE>`
 
-Path to the database file to query (.mxy file).
+Path to the database file to query. Supports:
+
+- **`.mxy` files** - Pre-built matchy database (fastest, recommended for production)
+- **`.json` files** - JSON source file (auto-built in memory)
+- **`.csv` files** - CSV source file (auto-built in memory)
+
+When a JSON or CSV file is provided, matchy automatically builds the database in-memory before matching. This is convenient for quick testing and ad-hoc analysis, but pre-building with `matchy build` is recommended for repeated use.
 
 ### `<INPUT>...`
 
@@ -219,6 +225,37 @@ $ matchy match threats.mxy /var/log/app*.log -f -j 4 --stats
 [INFO] Using parallel follow with 4 worker threads
 ...
 ```
+
+### Quick Testing with Source Files (Auto-Build)
+
+Skip the build step for quick ad-hoc analysis:
+
+```console
+# JSON source file (builds database in-memory automatically)
+$ cat threats.json
+[
+  {"key": "192.168.1.0/24", "data": {"type": "internal"}},
+  {"key": "*.malware.com", "data": {"severity": "high"}},
+  {"key": "evil.example.com", "data": {"category": "phishing"}}
+]
+
+$ matchy match threats.json access.log --stats
+[INFO] Building database from JSON file...
+[INFO] Loaded 3 entries from JSON
+[INFO] Database: 1 IPs, 1 literals, 1 globs
+[INFO] Built database from: threats.json
+{"matched_text":"192.168.1.50","match_type":"ip",...}
+
+# CSV source file
+$ cat threats.csv
+key,type,severity
+192.168.1.0/24,internal,low
+*.malware.com,malware,high
+
+$ matchy match threats.csv access.log
+```
+
+> **Note**: Auto-building is convenient for testing, but pre-building with `matchy build` is faster for repeated use since it avoids rebuilding on every invocation.
 
 ### Extract Only Matches
 

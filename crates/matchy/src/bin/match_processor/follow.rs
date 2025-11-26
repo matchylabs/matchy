@@ -272,12 +272,11 @@ fn process_new_content(
 #[allow(clippy::too_many_arguments)]
 pub fn follow_files_parallel(
     inputs: Vec<PathBuf>,
-    database_path: &Path,
+    db: Arc<matchy::Database>,
     num_threads: usize,
     output_format: &str,
     show_stats: bool,
     show_progress: bool,
-    cache_size: usize,
     overall_start: Instant,
     shutdown: Arc<AtomicBool>,
     extractor_config: super::parallel::ExtractorConfig,
@@ -287,12 +286,6 @@ pub fn follow_files_parallel(
     }
 
     let output_json = output_format == "json";
-
-    // Open database once and wrap in Arc for efficient sharing across all workers
-    let db = Arc::new(
-        super::parallel::init_worker_database(database_path, cache_size)
-            .context("Failed to open database")?,
-    );
 
     // Create channels for pipeline
     let work_queue_capacity = num_threads * 4;
