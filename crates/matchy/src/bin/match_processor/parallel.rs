@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -236,20 +236,6 @@ pub enum WorkerMessage {
         worker_id: usize,
         stats: WorkerStats,
     },
-}
-
-/// Initialize database for a worker thread
-/// Initialize database for a worker thread
-pub fn init_worker_database(database_path: &Path, cache_size: usize) -> Result<matchy::Database> {
-    use matchy::Database;
-
-    let mut opener = Database::from(database_path.to_str().unwrap());
-    if cache_size == 0 {
-        opener = opener.no_cache();
-    } else {
-        opener = opener.cache_capacity(cache_size);
-    }
-    opener.open().context("Failed to open database")
 }
 
 /// Create extractor configured for database capabilities and CLI overrides

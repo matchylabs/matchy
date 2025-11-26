@@ -752,6 +752,197 @@ fn test_json_output_includes_match_data() {
 }
 
 #[test]
+fn test_match_auto_build_json() {
+    // Test that match command can auto-build database from JSON source file
+    let temp_dir = TempDir::new().unwrap();
+    let json_file = temp_dir.path().join("patterns.json");
+    let log_file = temp_dir.path().join("test.log");
+
+    // Create JSON source file with patterns and metadata
+    let json_content = r#"[
+        {"key": "192.168.1.0/24", "data": {"type": "internal", "severity": "low"}},
+        {"key": "*.malware.com", "data": {"type": "malicious", "severity": "high"}},
+        {"key": "evil.example.com", "data": {"type": "phishing", "severity": "critical"}}
+    ]"#;
+    fs::write(&json_file, json_content).unwrap();
+
+    // Create log file with entries to match
+    fs::write(
+        &log_file,
+        "Connection from 192.168.1.50\nRequest to bad.malware.com\nSafe traffic\n",
+    )
+    .unwrap();
+
+    // Run match directly with JSON file (no pre-build step)
+    let output = matchy_cmd()
+        .arg("match")
+        .arg(&json_file)
+        .arg(&log_file)
+        .arg("--threads")
+        .arg("1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+
+    // Verify matches were found
+    assert!(
+        stdout.contains("192.168.1.50") || stdout.contains("192.168.1.0/24"),
+        "Should match IP from JSON source"
+    );
+    assert!(
+        stdout.contains("malware.com"),
+        "Should match domain pattern from JSON source"
+    );
+
+    // Verify metadata is preserved
+    assert!(
+        stdout.contains("internal") || stdout.contains("malicious"),
+        "Metadata should be preserved in output"
+    );
+}
+
+#[test]
+fn test_match_auto_build_csv() {
+    // Test that match command can auto-build database from CSV source file
+    let temp_dir = TempDir::new().unwrap();
+    let csv_file = temp_dir.path().join("patterns.csv");
+    let log_file = temp_dir.path().join("test.log");
+
+    // Create CSV source file with patterns and metadata
+    let csv_content = "key,type,severity\n\
+        192.168.1.0/24,internal,low\n\
+        *.malware.com,malicious,high\n\
+        evil.example.com,phishing,critical\n";
+    fs::write(&csv_file, csv_content).unwrap();
+
+    // Create log file
+    fs::write(
+        &log_file,
+        "Connection from 192.168.1.50\nRequest to bad.malware.com\n",
+    )
+    .unwrap();
+
+    // Run match directly with CSV file
+    let output = matchy_cmd()
+        .arg("match")
+        .arg(&csv_file)
+        .arg(&log_file)
+        .arg("--threads")
+        .arg("1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+
+    // Verify matches were found
+    assert!(
+        stdout.contains("192.168.1") || stdout.contains("192.168.1.0/24"),
+        "Should match IP from CSV source"
+    );
+    assert!(
+        stdout.contains("malware.com"),
+        "Should match domain pattern from CSV source"
+    );
+}
+
+#[test]
+fn test_match_auto_build_json_parallel() {
+    // Test auto-build works in parallel mode
+    let temp_dir = TempDir::new().unwrap();
+    let json_file = temp_dir.path().join("patterns.json");
+    let log_file = temp_dir.path().join("test.log");
+
+    let json_content = r#"[
+        {"key": "8.8.8.8", "data": {"type": "dns"}},
+        {"key": "*.test.com", "data": {"type": "test"}}
+    ]"#;
+    fs::write(&json_file, json_content).unwrap();
+
+    fs::write(&log_file, "Query to 8.8.8.8\nRequest to sub.test.com\n").unwrap();
+
+    matchy_cmd()
+        .arg("match")
+        .arg(&json_file)
+        .arg(&log_file)
+        .arg("--threads")
+        .arg("auto")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8.8.8.8"));
+}
+
+#[test]
+fn test_match_auto_build_json_invalid() {
+    // Test error handling for malformed JSON
+    let temp_dir = TempDir::new().unwrap();
+    let json_file = temp_dir.path().join("bad.json");
+    let log_file = temp_dir.path().join("test.log");
+
+    // Invalid JSON
+    fs::write(&json_file, "{ not valid json }").unwrap();
+    fs::write(&log_file, "test\n").unwrap();
+
+    matchy_cmd()
+        .arg("match")
+        .arg(&json_file)
+        .arg(&log_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parse JSON").or(predicate::str::contains("JSON")));
+}
+
+#[test]
+fn test_match_auto_build_csv_missing_key_column() {
+    // Test error handling for CSV without key/entry column
+    let temp_dir = TempDir::new().unwrap();
+    let csv_file = temp_dir.path().join("bad.csv");
+    let log_file = temp_dir.path().join("test.log");
+
+    // CSV without required key/entry column
+    fs::write(&csv_file, "type,severity\nmalware,high\n").unwrap();
+    fs::write(&log_file, "test\n").unwrap();
+
+    matchy_cmd()
+        .arg("match")
+        .arg(&csv_file)
+        .arg(&log_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("entry").or(predicate::str::contains("key")));
+}
+
+#[test]
+fn test_match_auto_build_with_stats() {
+    // Test auto-build with stats flag shows build info
+    let temp_dir = TempDir::new().unwrap();
+    let json_file = temp_dir.path().join("patterns.json");
+    let log_file = temp_dir.path().join("test.log");
+
+    let json_content = r#"[{"key": "test.com"}]"#;
+    fs::write(&json_file, json_content).unwrap();
+    fs::write(&log_file, "Request to test.com\n").unwrap();
+
+    matchy_cmd()
+        .arg("match")
+        .arg(&json_file)
+        .arg(&log_file)
+        .arg("--threads")
+        .arg("1")
+        .arg("-s")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Building database from JSON"))
+        .stderr(predicate::str::contains("Built database from"));
+}
+
+#[test]
 fn test_json_output_parallel_mode() {
     // Verify JSON output works correctly in parallel mode
     let temp_dir = TempDir::new().unwrap();
