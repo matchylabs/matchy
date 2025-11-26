@@ -42,6 +42,12 @@ use rustc_hash::FxHashMap;
 use std::mem;
 use xxhash_rust::xxh64::xxh64;
 
+// Validation module for literal hash structures
+pub mod validation;
+
+// Re-export validation types for convenience
+pub use validation::{validate_literal_hash, LiteralHashStats, LiteralHashValidationResult};
+
 /// Errors that can occur in literal hash operations
 #[derive(Debug, Clone)]
 pub enum LiteralHashError {

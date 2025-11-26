@@ -217,7 +217,7 @@ enum Commands {
         #[arg(value_name = "DATABASE")]
         database: PathBuf,
 
-        /// Validation level: standard, strict (default), or audit
+        /// Validation level: standard or strict (default)
         #[arg(short, long, default_value = "strict")]
         level: String,
 

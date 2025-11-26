@@ -14,10 +14,9 @@ pub fn cmd_validate(
     let level = match level_str.to_lowercase().as_str() {
         "standard" => ValidationLevel::Standard,
         "strict" => ValidationLevel::Strict,
-        "audit" => ValidationLevel::Audit,
         _ => {
             anyhow::bail!(
-                "Invalid validation level: '{}'. Must be: standard, strict, or audit",
+                "Invalid validation level: '{}'. Must be: standard or strict",
                 level_str
             );
         }

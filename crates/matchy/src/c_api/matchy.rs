@@ -1719,8 +1719,6 @@ pub unsafe extern "C" fn matchy_result_to_json(result: *const matchy_result_t) -
 pub const MATCHY_VALIDATION_STANDARD: i32 = 0;
 /// Strict validation level - standard plus deep graph analysis and consistency checks (default)
 pub const MATCHY_VALIDATION_STRICT: i32 = 1;
-/// Audit validation level - strict plus unsafe code tracking for security reviews
-pub const MATCHY_VALIDATION_AUDIT: i32 = 2;
 
 /// Validate a database file
 ///
@@ -1729,7 +1727,7 @@ pub const MATCHY_VALIDATION_AUDIT: i32 = 2;
 ///
 /// # Parameters
 /// * `filename` - Path to database file (null-terminated C string, must not be NULL)
-/// * `level` - Validation level (MATCHY_VALIDATION_STANDARD, _STRICT, or _AUDIT)
+/// * `level` - Validation level (MATCHY_VALIDATION_STANDARD or _STRICT)
 /// * `error_message` - Pointer to receive error message (may be NULL if not needed)
 ///   If non-NULL and validation fails, receives a string that must be freed with matchy_free_string
 ///
@@ -1773,7 +1771,6 @@ pub unsafe extern "C" fn matchy_validate(
     let validation_level = match level {
         MATCHY_VALIDATION_STANDARD => ValidationLevel::Standard,
         MATCHY_VALIDATION_STRICT => ValidationLevel::Strict,
-        MATCHY_VALIDATION_AUDIT => ValidationLevel::Audit,
         _ => return MATCHY_ERROR_INVALID_PARAM,
     };
 

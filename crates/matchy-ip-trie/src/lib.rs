@@ -5,6 +5,12 @@
 
 use std::fmt;
 use std::net::IpAddr;
+
+// Validation module for IP tree structures
+pub mod validation;
+
+// Re-export validation types for convenience
+pub use validation::{validate_ip_tree, IpTreeStats, IpTreeValidationResult};
 /// Error type for IP tree operations
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpTreeError {

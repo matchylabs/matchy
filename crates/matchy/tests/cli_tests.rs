@@ -367,7 +367,7 @@ fn test_validate_levels() {
         .success();
 
     // Test different validation levels - they should at least run
-    for level in &["standard", "strict", "audit"] {
+    for level in &["standard", "strict"] {
         matchy_cmd()
             .arg("validate")
             .arg(&output_file)

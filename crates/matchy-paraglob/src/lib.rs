@@ -17,3 +17,12 @@ pub use paraglob_offset::{Paraglob, ParaglobBuilder};
 
 // Re-export MatchMode from shared crate
 pub use matchy_match_mode::MatchMode;
+
+// Validation module for paraglob structures
+pub mod validation;
+
+// Re-export validation types for convenience
+pub use validation::{
+    build_pattern_info, validate_ac_literal_mapping, validate_meta_word_mappings,
+    validate_patterns, ParaglobStats, ParaglobValidationResult,
+};

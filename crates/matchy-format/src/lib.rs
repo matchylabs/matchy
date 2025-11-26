@@ -13,6 +13,9 @@ pub mod mmap;
 pub mod mmdb;
 pub mod mmdb_builder;
 pub mod offset_format;
+mod validation;
+
+pub use validation::{validate_data_mapping_consistency, FormatStats, FormatValidationResult};
 
 // Re-exports for convenience
 pub use error::FormatError;

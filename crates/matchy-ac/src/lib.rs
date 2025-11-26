@@ -22,6 +22,15 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 // Re-export MatchMode from shared crate
 pub use matchy_match_mode::MatchMode;
 
+// Validation module for AC automaton structures
+pub mod validation;
+
+// Re-export validation types for convenience
+pub use validation::{
+    validate_ac_reachability, validate_ac_structure, validate_pattern_references, ACStats,
+    ACValidationResult,
+};
+
 /// Error type for AC automaton operations
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ACError {

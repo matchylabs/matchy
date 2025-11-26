@@ -173,11 +173,6 @@ namespace matchy {
 #define MATCHY_VALIDATION_STRICT 1
 
 /*
- Audit validation level - strict plus unsafe code tracking for security reviews
- */
-#define MATCHY_VALIDATION_AUDIT 2
-
-/*
  Opaque database builder handle
  */
 typedef struct matchy_builder_t {
@@ -1080,7 +1075,7 @@ char *matchy_result_to_json(const struct matchy_result_t *result);
 
  # Parameters
  * `filename` - Path to database file (null-terminated C string, must not be NULL)
- * `level` - Validation level (MATCHY_VALIDATION_STANDARD, _STRICT, or _AUDIT)
+ * `level` - Validation level (MATCHY_VALIDATION_STANDARD or _STRICT)
  * `error_message` - Pointer to receive error message (may be NULL if not needed)
    If non-NULL and validation fails, receives a string that must be freed with matchy_free_string
 

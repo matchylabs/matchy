@@ -37,15 +37,10 @@
 
 use crate::error::{MatchyError, Result};
 use crate::offset_format::{
-    ParaglobHeader, PatternDataMapping, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1,
+    ParaglobHeader, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1,
     MATCHY_FORMAT_VERSION_V2, MATCHY_FORMAT_VERSION_V3,
 };
-// AC and pattern structures come from matchy-ac and matchy-paraglob
-// TODO: This deep validation logic should be moved into matchy-paraglob itself
-// to properly encapsulate paraglob internals. For now, we import what we need.
-use matchy_ac::{ACEdge, ACNodeHot, StateKind};
 use matchy_paraglob::error::ParaglobError;
-use matchy_paraglob::offset_format::{MetaWordMapping, PatternEntry};
 use std::collections::HashSet;
 use std::fs::File;
 use std::mem;
@@ -59,9 +54,6 @@ pub enum ValidationLevel {
     Standard,
     /// Strict checks: deep graph analysis, cycles, redundancy, PARAGLOB consistency (default)
     Strict,
-    /// Audit mode: Track all unsafe code paths and trust assumptions
-    /// Reports where --trusted mode would bypass validation
-    Audit,
 }
 
 /// Validation report with detailed findings
@@ -102,45 +94,6 @@ pub struct DatabaseStats {
     pub has_ac_literal_mapping: bool,
     /// Number of state encoding types used
     pub state_encoding_distribution: [u32; 4], // Empty, One, Sparse, Dense
-    /// Locations where unsafe code is used (Audit mode only)
-    pub unsafe_code_locations: Vec<UnsafeCodeLocation>,
-    /// Trust assumptions that would bypass validation
-    pub trust_assumptions: Vec<TrustAssumption>,
-}
-
-/// Location where unsafe code is used
-#[derive(Debug, Clone)]
-pub struct UnsafeCodeLocation {
-    /// Source file and function
-    pub location: String,
-    /// Type of unsafe operation
-    pub operation: UnsafeOperation,
-    /// Description of why it's needed
-    pub justification: String,
-}
-
-/// Types of unsafe operations
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UnsafeOperation {
-    /// Unchecked UTF-8 string reading
-    UncheckedStringRead,
-    /// Raw pointer dereferencing
-    PointerDereference,
-    /// Memory mapping with 'static lifetime extension
-    MmapLifetimeExtension,
-    /// Transmute or type reinterpretation
-    Transmute,
-}
-
-/// Trust assumption that bypasses validation
-#[derive(Debug, Clone)]
-pub struct TrustAssumption {
-    /// Where this trust is assumed
-    pub context: String,
-    /// What validation is bypassed
-    pub bypassed_check: String,
-    /// Risk if assumption is violated
-    pub risk: String,
 }
 
 impl ValidationReport {
@@ -418,8 +371,8 @@ fn validate_mmdb_database(
                     buffer, tree_size, node_count, node_bytes, report, level,
                 )?;
 
-                // Strict/Audit mode: deep validation
-                if level == ValidationLevel::Strict || level == ValidationLevel::Audit {
+                // Strict mode: deep validation
+                if level == ValidationLevel::Strict {
                     // Check for size bombs
                     validate_size_limits(buffer.len(), node_count, tree_size, report)?;
 
@@ -430,18 +383,19 @@ fn validate_mmdb_database(
                     validate_data_pointers(buffer, tree_size, node_count, node_bytes, report)?;
 
                     // Deep IP tree traversal validation
-                    validate_ip_tree_structure(
-                        buffer, tree_size, node_count, node_bytes, ip_version, report,
-                    )?;
-                }
-
-                // Audit mode: also track unsafe code and trust assumptions
-                if level == ValidationLevel::Audit {
-                    // Audit unsafe code usage
-                    audit_unsafe_code_paths(report)?;
-
-                    // Audit trust mode risks
-                    audit_trust_mode_risks(buffer, report)?;
+                    let ip_tree_result = matchy_ip_trie::validate_ip_tree(
+                        buffer, tree_size, node_count, node_bytes, ip_version,
+                    );
+                    report.errors.extend(ip_tree_result.errors);
+                    report.warnings.extend(ip_tree_result.warnings);
+                    if ip_tree_result.stats.nodes_visited > 0 {
+                        report.info(format!(
+                            "IP tree traversal: {} nodes visited out of {} total ({}% coverage)",
+                            ip_tree_result.stats.nodes_visited,
+                            node_count,
+                            (ip_tree_result.stats.nodes_visited * 100) / node_count
+                        ));
+                    }
                 }
             }
         }
@@ -836,41 +790,7 @@ fn validate_data_section_utf8(
 /// Check UTF-8 validity of all strings in a data value
 /// Returns count of strings checked, or error if invalid UTF-8 found
 fn check_data_value_utf8(data_section: &[u8], offset: usize) -> std::result::Result<u32, String> {
-    use matchy_data_format::DataDecoder;
-
-    let decoder = DataDecoder::new(data_section, 0);
-
-    match decoder.decode(offset as u32) {
-        Ok(value) => check_value_strings_utf8(&value),
-        Err(_) => Ok(0), // Can't decode, skip
-    }
-}
-
-/// Recursively check all strings in a DataValue for UTF-8 validity
-fn check_value_strings_utf8(value: &crate::DataValue) -> std::result::Result<u32, String> {
-    let mut count = 0u32;
-
-    match value {
-        crate::DataValue::String(_s) => {
-            // String is already validated UTF-8 when decoded
-            count += 1;
-        }
-        crate::DataValue::Map(map) => {
-            for val in map.values() {
-                // Keys are already validated UTF-8
-                count += 1;
-                count += check_value_strings_utf8(val)?;
-            }
-        }
-        crate::DataValue::Array(arr) => {
-            for val in arr {
-                count += check_value_strings_utf8(val)?;
-            }
-        }
-        _ => {} // Other types don't contain strings
-    }
-
-    Ok(count)
+    matchy_data_format::validate_data_value_utf8(data_section, offset, 0)
 }
 
 /// Validate MMDB data section structure
@@ -977,33 +897,46 @@ fn validate_paraglob_section(
     report.stats.has_data_section = header.has_data_section();
     report.stats.has_ac_literal_mapping = header.has_ac_literal_mapping();
 
-    // Validate PARAGLOB structure
-    validate_paraglob_offsets(paraglob_data, &header, report)?;
+    // Validate AC automaton structure
+    let is_strict = level == ValidationLevel::Strict;
+    let ac_result = matchy_ac::validate_ac_structure(
+        paraglob_data,
+        header.ac_nodes_offset as usize,
+        header.ac_node_count as usize,
+        header.pattern_count,
+        is_strict,
+    );
+    report.errors.extend(ac_result.errors);
+    report.warnings.extend(ac_result.warnings);
+    report.stats.state_encoding_distribution = ac_result.stats.state_encoding_distribution;
 
     if !report.is_valid() {
         return Ok(());
     }
 
-    validate_paraglob_strings(paraglob_data, &header, report)?;
+    // Validate patterns
+    let pattern_result = matchy_paraglob::validate_patterns(
+        paraglob_data,
+        header.patterns_offset as usize,
+        header.pattern_count as usize,
+    );
+    report.errors.extend(pattern_result.errors);
+    report.warnings.extend(pattern_result.warnings);
+    report.stats.literal_count = pattern_result.stats.literal_count;
+    report.stats.glob_count = pattern_result.stats.glob_count;
+    if header.pattern_count > 0 {
+        report.info(format!(
+            "Patterns: {} total ({} literal, {} glob)",
+            header.pattern_count, pattern_result.stats.literal_count, pattern_result.stats.glob_count
+        ));
+    }
 
     if !report.is_valid() {
         return Ok(());
     }
 
-    validate_ac_structure(paraglob_data, &header, report, level)?;
-
-    if !report.is_valid() {
-        return Ok(());
-    }
-
-    validate_patterns(paraglob_data, &header, report)?;
-
-    if !report.is_valid() {
-        return Ok(());
-    }
-
-    // PARAGLOB consistency checks in strict/audit modes
-    if level == ValidationLevel::Strict || level == ValidationLevel::Audit {
+    // PARAGLOB consistency checks in strict mode
+    if level == ValidationLevel::Strict {
         validate_paraglob_consistency(paraglob_data, &header, report, level)?;
     }
 
@@ -1100,125 +1033,8 @@ fn validate_paraglob_header(buffer: &[u8], report: &mut ValidationReport) -> Res
         ));
     }
 
-    // Use built-in offset validation
     if let Err(e) = header.validate_offsets(buffer.len()) {
         report.error(format!("Header offset validation failed: {}", e));
-    }
-
-    Ok(())
-}
-
-/// Validate all offsets in the PARAGLOB section
-fn validate_paraglob_offsets(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    let buffer_len = buffer.len();
-
-    // Validate AC nodes section
-    if header.ac_node_count > 0 {
-        let offset = header.ac_nodes_offset as usize;
-        let size = (header.ac_node_count as usize) * mem::size_of::<ACNodeHot>();
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "AC nodes section out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        } else {
-            // Check alignment
-            if !offset.is_multiple_of(mem::align_of::<ACNodeHot>()) {
-                report.error(format!(
-                    "AC nodes section misaligned: offset={}, required_alignment={}",
-                    offset,
-                    mem::align_of::<ACNodeHot>()
-                ));
-            }
-        }
-    }
-
-    // Validate patterns section
-    if header.pattern_count > 0 {
-        let offset = header.patterns_offset as usize;
-        let size = (header.pattern_count as usize) * mem::size_of::<PatternEntry>();
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "Patterns section out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        } else if !offset.is_multiple_of(mem::align_of::<PatternEntry>()) {
-            report.error(format!(
-                "Patterns section misaligned: offset={}, required_alignment={}",
-                offset,
-                mem::align_of::<PatternEntry>()
-            ));
-        }
-    }
-
-    // Validate pattern strings section
-    if header.pattern_strings_size > 0 {
-        let offset = header.pattern_strings_offset as usize;
-        let size = header.pattern_strings_size as usize;
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "Pattern strings section out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        }
-    }
-
-    // Validate meta-word mappings
-    if header.meta_word_mapping_count > 0 {
-        let offset = header.meta_word_mappings_offset as usize;
-        let size = (header.meta_word_mapping_count as usize) * mem::size_of::<MetaWordMapping>();
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "Meta-word mappings section out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        }
-    }
-
-    // Validate data section (v2+)
-    if header.has_data_section() {
-        let offset = header.data_section_offset as usize;
-        let size = header.data_section_size as usize;
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "Data section out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        }
-    }
-
-    // Validate mapping table (v2+)
-    if header.mapping_count > 0 {
-        let offset = header.mapping_table_offset as usize;
-        let size = (header.mapping_count as usize) * mem::size_of::<PatternDataMapping>();
-
-        if !validate_range(offset, size, buffer_len) {
-            report.error(format!(
-                "Mapping table out of bounds: offset={}, size={}, buffer={}",
-                offset, size, buffer_len
-            ));
-        }
-    }
-
-    // Validate AC literal mapping (v3)
-    if header.has_ac_literal_mapping() {
-        let offset = header.ac_literal_map_offset as usize;
-        // Size is variable, just check offset for now
-        if offset >= buffer_len {
-            report.error(format!(
-                "AC literal mapping offset out of bounds: offset={}, buffer={}",
-                offset, buffer_len
-            ));
-        }
     }
 
     Ok(())
@@ -1231,363 +1047,13 @@ fn validate_range(offset: usize, size: usize, buffer_len: usize) -> bool {
         .is_some_and(|end| end <= buffer_len)
 }
 
-/// Validate all strings in PARAGLOB section are valid UTF-8
-fn validate_paraglob_strings(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    // Validate pattern strings
-    if header.pattern_count > 0 && header.pattern_strings_size > 0 {
-        let patterns_offset = header.patterns_offset as usize;
-        let patterns_count = header.pattern_count as usize;
-
-        // Read all pattern entries
-        for i in 0..patterns_count {
-            let entry_offset = patterns_offset + i * mem::size_of::<PatternEntry>();
-
-            if entry_offset + mem::size_of::<PatternEntry>() > buffer.len() {
-                report.error(format!("Pattern entry {} out of bounds", i));
-                continue;
-            }
-
-            let entry = PatternEntry::read_from_prefix(&buffer[entry_offset..])
-                .map(|(e, _)| e)
-                .map_err(|_| ParaglobError::Format("Failed to read pattern entry".to_string()))?;
-
-            let str_offset = entry.pattern_string_offset as usize;
-            let str_length = entry.pattern_string_length as usize;
-
-            // Validate string bounds
-            if !validate_range(str_offset, str_length, buffer.len()) {
-                report.error(format!(
-                    "Pattern {} string out of bounds: offset={}, length={}",
-                    i, str_offset, str_length
-                ));
-                continue;
-            }
-
-            // Validate UTF-8
-            let str_bytes = &buffer[str_offset..str_offset + str_length];
-            if let Err(e) = std::str::from_utf8(str_bytes) {
-                report.error(format!(
-                    "Pattern {} contains invalid UTF-8 at offset {}: {}",
-                    i, str_offset, e
-                ));
-            }
-
-            // Check for null terminator after string (optional but recommended)
-            if str_offset + str_length < buffer.len() && buffer[str_offset + str_length] != 0 {
-                report.warning(format!(
-                    "Pattern {} is not null-terminated (offset={})",
-                    i, str_offset
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Validate AC automaton structure
-fn validate_ac_structure(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-    level: ValidationLevel,
-) -> Result<()> {
-    if header.ac_node_count == 0 {
-        report.info("No AC automaton nodes (empty database)");
-        return Ok(());
-    }
-
-    let nodes_offset = header.ac_nodes_offset as usize;
-    let node_count = header.ac_node_count as usize;
-
-    let mut state_distribution = [0u32; 4];
-
-    for i in 0..node_count {
-        let node_offset = nodes_offset + i * mem::size_of::<ACNodeHot>();
-
-        if node_offset + mem::size_of::<ACNodeHot>() > buffer.len() {
-            report.error(format!("AC node {} out of bounds", i));
-            continue;
-        }
-
-        let node = ACNodeHot::read_from_prefix(&buffer[node_offset..])
-            .map(|(n, _)| n)
-            .map_err(|_| ParaglobError::Format("Failed to read AC node".to_string()))?;
-
-        // Note: ACNodeHot doesn't store depth (removed for cache optimization)
-        // max_depth tracking removed
-
-        // Validate state kind
-        let state_kind = match node.state_kind {
-            0 => StateKind::Empty,
-            1 => StateKind::One,
-            2 => StateKind::Sparse,
-            3 => StateKind::Dense,
-            _ => {
-                report.error(format!(
-                    "AC node {} has invalid state kind: {}",
-                    i, node.state_kind
-                ));
-                continue;
-            }
-        };
-        state_distribution[state_kind as usize] += 1;
-
-        // Validate failure link
-        if node.failure_offset != 0 {
-            let failure_node_offset = node.failure_offset as usize;
-            if failure_node_offset < nodes_offset
-                || failure_node_offset >= nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                || !(failure_node_offset - nodes_offset).is_multiple_of(mem::size_of::<ACNodeHot>())
-            {
-                report.error(format!(
-                    "AC node {} has invalid failure link offset: {}",
-                    i, node.failure_offset
-                ));
-            }
-
-            // Check for self-loop (root is at offset nodes_offset)
-            if failure_node_offset == node_offset && node_offset != nodes_offset {
-                report.error(format!("AC node {} has self-referencing failure link", i));
-            }
-        }
-
-        // Validate edges based on state kind
-        match state_kind {
-            StateKind::Empty => {
-                if node.edge_count != 0 {
-                    report.error(format!(
-                        "AC node {} is Empty but has edge_count={}",
-                        i, node.edge_count
-                    ));
-                }
-            }
-            StateKind::One => {
-                // Single edge stored inline
-                if node.edge_count != 0 {
-                    report.warning(format!(
-                        "AC node {} is One but has edge_count={} (should be 0)",
-                        i, node.edge_count
-                    ));
-                }
-                // Validate target offset (stored in edges_offset for One encoding)
-                let target_offset = node.edges_offset as usize;
-                if target_offset != 0
-                    && (target_offset < nodes_offset
-                        || target_offset >= nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                        || !(target_offset - nodes_offset)
-                            .is_multiple_of(mem::size_of::<ACNodeHot>()))
-                {
-                    report.error(format!(
-                        "AC node {} (One) has invalid target offset: {}",
-                        i, target_offset
-                    ));
-                }
-            }
-            StateKind::Sparse => {
-                // Validate edge array
-                let edges_offset = node.edges_offset as usize;
-                let edge_count = node.edge_count as usize;
-                let edges_size = edge_count * mem::size_of::<ACEdge>();
-
-                if edge_count == 0 {
-                    report.error(format!("AC node {} is Sparse but has no edges", i));
-                } else if !validate_range(edges_offset, edges_size, buffer.len()) {
-                    report.error(format!(
-                        "AC node {} edge array out of bounds: offset={}, count={}",
-                        i, edges_offset, edge_count
-                    ));
-                } else if level == ValidationLevel::Strict || level == ValidationLevel::Audit {
-                    // Validate each edge
-                    for j in 0..edge_count {
-                        let edge_offset = edges_offset + j * mem::size_of::<ACEdge>();
-                        if let Ok((edge, _)) = ACEdge::read_from_prefix(&buffer[edge_offset..]) {
-                            let target_offset = edge.target_offset as usize;
-                            if target_offset < nodes_offset
-                                || target_offset
-                                    >= nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                                || !(target_offset - nodes_offset)
-                                    .is_multiple_of(mem::size_of::<ACNodeHot>())
-                            {
-                                report.error(format!(
-                                    "AC node {} edge {} has invalid target: {}",
-                                    i, j, target_offset
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            StateKind::Dense => {
-                // Validate dense lookup table (256 * 4 bytes = 1024 bytes)
-                let lookup_offset = node.edges_offset as usize;
-                let lookup_size = 1024;
-
-                if !validate_range(lookup_offset, lookup_size, buffer.len()) {
-                    report.error(format!(
-                        "AC node {} dense lookup out of bounds: offset={}",
-                        i, lookup_offset
-                    ));
-                } else if !lookup_offset.is_multiple_of(64) {
-                    report.warning(format!(
-                        "AC node {} dense lookup not cache-aligned: offset={}",
-                        i, lookup_offset
-                    ));
-                }
-
-                // Optionally validate all targets in strict/audit mode
-                if level == ValidationLevel::Strict || level == ValidationLevel::Audit {
-                    for j in 0..256 {
-                        let target_offset_pos = lookup_offset + j * 4;
-                        if target_offset_pos + 4 <= buffer.len() {
-                            let target_offset = u32::from_le_bytes([
-                                buffer[target_offset_pos],
-                                buffer[target_offset_pos + 1],
-                                buffer[target_offset_pos + 2],
-                                buffer[target_offset_pos + 3],
-                            ]) as usize;
-
-                            if target_offset != 0
-                                && (target_offset < nodes_offset
-                                    || target_offset
-                                        >= nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                                    || !(target_offset - nodes_offset)
-                                        .is_multiple_of(mem::size_of::<ACNodeHot>()))
-                            {
-                                report.error(format!(
-                                    "AC node {} dense entry [{}] has invalid target: {}",
-                                    i, j, target_offset
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Validate pattern IDs
-        if node.pattern_count > 0 {
-            let patterns_offset = node.patterns_offset as usize;
-            let patterns_size = (node.pattern_count as usize) * mem::size_of::<u32>();
-
-            if !validate_range(patterns_offset, patterns_size, buffer.len()) {
-                report.error(format!(
-                    "AC node {} pattern IDs out of bounds: offset={}, count={}",
-                    i, patterns_offset, node.pattern_count
-                ));
-            } else {
-                // Validate each pattern ID references a valid pattern
-                for j in 0..(node.pattern_count as usize) {
-                    let pid_offset = patterns_offset + j * mem::size_of::<u32>();
-                    if pid_offset + 4 <= buffer.len() {
-                        let pattern_id = u32::from_le_bytes([
-                            buffer[pid_offset],
-                            buffer[pid_offset + 1],
-                            buffer[pid_offset + 2],
-                            buffer[pid_offset + 3],
-                        ]);
-
-                        if pattern_id >= header.pattern_count {
-                            report.error(format!(
-                                "AC node {} pattern ID {} out of range: {} (max={})",
-                                i, j, pattern_id, header.pattern_count
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Note: visited tracking removed (ACNodeHot doesn't have node_id)
-        // All nodes are implicitly visited by linear iteration
-    }
-
-    report.stats.state_encoding_distribution = state_distribution;
-
-    report.info(format!(
-        "AC automaton: {} nodes, encodings: Empty={}, One={}, Sparse={}, Dense={}",
-        node_count,
-        state_distribution[0],
-        state_distribution[1],
-        state_distribution[2],
-        state_distribution[3]
-    ));
-
-    // Note: Unreachable node detection removed for ACNodeHot (no node_id tracking)
-    // Use validate_ac_reachability() in consistency checks instead
-
-    Ok(())
-}
-
-/// Validate pattern entries
-fn validate_patterns(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    if header.pattern_count == 0 {
-        report.info("No patterns in database");
-        return Ok(());
-    }
-
-    let patterns_offset = header.patterns_offset as usize;
-    let pattern_count = header.pattern_count as usize;
-
-    let mut literal_count = 0;
-    let mut glob_count = 0;
-
-    for i in 0..pattern_count {
-        let entry_offset = patterns_offset + i * mem::size_of::<PatternEntry>();
-
-        if entry_offset + mem::size_of::<PatternEntry>() > buffer.len() {
-            continue; // Already reported in validate_offsets
-        }
-
-        let entry = PatternEntry::read_from_prefix(&buffer[entry_offset..])
-            .map(|(e, _)| e)
-            .map_err(|_| ParaglobError::Format("Failed to read pattern entry".to_string()))?;
-
-        // Validate pattern type
-        match entry.pattern_type {
-            0 => literal_count += 1, // Literal
-            1 => glob_count += 1,    // Glob
-            t => report.error(format!("Pattern {} has invalid type: {}", i, t)),
-        }
-
-        // Pattern ID should match index (typically)
-        if entry.pattern_id != i as u32 {
-            report.warning(format!(
-                "Pattern {} has mismatched ID: {} (expected {})",
-                i, entry.pattern_id, i
-            ));
-        }
-    }
-
-    report.stats.literal_count = literal_count;
-    report.stats.glob_count = glob_count;
-    report.info(format!(
-        "Patterns: {} total ({} literal, {} glob)",
-        pattern_count, literal_count, glob_count
-    ));
-
-    Ok(())
-}
-
 /// Validate PARAGLOB consistency - checks for data structure integrity issues
-/// This includes:
-/// - Orphan AC nodes (nodes not reachable from root)
-/// - Pattern-literal mapping bidirectionality
-/// - Wildcard entry validity
-/// - Data section mapping consistency
+/// This orchestrates calls to component validators
 fn validate_paraglob_consistency(
     buffer: &[u8],
     header: &ParaglobHeader,
     report: &mut ValidationReport,
-    level: ValidationLevel,
+    _level: ValidationLevel,
 ) -> Result<()> {
     // Skip if empty database
     if header.ac_node_count == 0 && header.pattern_count == 0 {
@@ -1596,833 +1062,79 @@ fn validate_paraglob_consistency(
 
     report.info("Running PARAGLOB consistency checks...");
 
-    // 1. Check for orphan AC nodes (unreachable from root)
-    validate_ac_reachability(buffer, header, report)?;
-
-    // 2. Validate pattern-to-AC-node bidirectional consistency
-    validate_pattern_ac_consistency(buffer, header, report)?;
-
-    // 3. Validate AC literal mapping consistency (v3)
-    if header.has_ac_literal_mapping() {
-        validate_ac_literal_mapping_consistency(buffer, header, report)?;
-    }
-
-    // 4. Validate data section mappings consistency (v2+)
-    if header.has_data_section() && header.mapping_count > 0 {
-        validate_data_mapping_consistency(buffer, header, report)?;
-    }
-
-    // 5. Validate meta-word mappings
-    if header.meta_word_mapping_count > 0 {
-        validate_meta_word_consistency(buffer, header, report)?;
-    }
-
-    // 6. Audit mode: track potential performance issues
-    if level == ValidationLevel::Audit {
-        audit_paraglob_performance(header, report)?;
-    }
-
-    report.info("✓ PARAGLOB consistency checks complete");
-    Ok(())
-}
-
-/// Check that all AC nodes are reachable from root (no orphans)
-fn validate_ac_reachability(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    if header.ac_node_count == 0 {
-        return Ok(());
-    }
-
-    let nodes_offset = header.ac_nodes_offset as usize;
-    let node_count = header.ac_node_count as usize;
-
-    // Track which nodes are reachable via BFS from root
-    let mut reachable = vec![false; node_count];
-    let mut queue = Vec::new();
-
-    // Start from root (node 0)
-    if node_count > 0 {
-        queue.push(0usize);
-        reachable[0] = true;
-    }
-
-    let mut _nodes_visited = 0;
-
-    while let Some(node_idx) = queue.pop() {
-        _nodes_visited += 1;
-
-        let node_offset = nodes_offset + node_idx * mem::size_of::<ACNodeHot>();
-        if node_offset + mem::size_of::<ACNodeHot>() > buffer.len() {
-            continue;
-        }
-
-        let node = match ACNodeHot::read_from_prefix(&buffer[node_offset..]) {
-            Ok((n, _)) => n,
-            Err(_) => continue,
-        };
-
-        let state_kind = match node.state_kind {
-            0 => StateKind::Empty,
-            1 => StateKind::One,
-            2 => StateKind::Sparse,
-            3 => StateKind::Dense,
-            _ => continue,
-        };
-
-        // Follow all edges to mark children as reachable
-        match state_kind {
-            StateKind::Empty => {}
-            StateKind::One => {
-                // Single edge stored inline in edges_offset
-                let target_offset = node.edges_offset as usize;
-                if target_offset >= nodes_offset
-                    && target_offset < nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                {
-                    let target_idx = (target_offset - nodes_offset) / mem::size_of::<ACNodeHot>();
-                    if target_idx < node_count && !reachable[target_idx] {
-                        reachable[target_idx] = true;
-                        queue.push(target_idx);
-                    }
-                }
-            }
-            StateKind::Sparse => {
-                let edges_offset = node.edges_offset as usize;
-                let edge_count = node.edge_count as usize;
-
-                for i in 0..edge_count {
-                    let edge_offset = edges_offset + i * mem::size_of::<ACEdge>();
-                    if edge_offset + mem::size_of::<ACEdge>() <= buffer.len() {
-                        if let Ok((edge, _)) = ACEdge::read_from_prefix(&buffer[edge_offset..]) {
-                            let target_offset = edge.target_offset as usize;
-                            if target_offset >= nodes_offset
-                                && target_offset
-                                    < nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                            {
-                                let target_idx =
-                                    (target_offset - nodes_offset) / mem::size_of::<ACNodeHot>();
-                                if target_idx < node_count && !reachable[target_idx] {
-                                    reachable[target_idx] = true;
-                                    queue.push(target_idx);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            StateKind::Dense => {
-                let lookup_offset = node.edges_offset as usize;
-                let lookup_size = 1024; // 256 * 4 bytes
-
-                if lookup_offset + lookup_size <= buffer.len() {
-                    for i in 0..256 {
-                        let target_offset_pos = lookup_offset + i * 4;
-                        if target_offset_pos + 4 <= buffer.len() {
-                            let target_offset = u32::from_le_bytes([
-                                buffer[target_offset_pos],
-                                buffer[target_offset_pos + 1],
-                                buffer[target_offset_pos + 2],
-                                buffer[target_offset_pos + 3],
-                            ]) as usize;
-
-                            if target_offset != 0
-                                && target_offset >= nodes_offset
-                                && target_offset
-                                    < nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-                            {
-                                let target_idx =
-                                    (target_offset - nodes_offset) / mem::size_of::<ACNodeHot>();
-                                if target_idx < node_count && !reachable[target_idx] {
-                                    reachable[target_idx] = true;
-                                    queue.push(target_idx);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Also follow failure links to ensure we reach all nodes
-        if node.failure_offset != 0 {
-            let failure_offset = node.failure_offset as usize;
-            if failure_offset >= nodes_offset
-                && failure_offset < nodes_offset + node_count * mem::size_of::<ACNodeHot>()
-            {
-                let failure_idx = (failure_offset - nodes_offset) / mem::size_of::<ACNodeHot>();
-                if failure_idx < node_count && !reachable[failure_idx] {
-                    reachable[failure_idx] = true;
-                    queue.push(failure_idx);
-                }
-            }
-        }
-    }
-
-    // Count orphaned nodes
-    let orphaned_count = reachable.iter().filter(|&&r| !r).count();
-
-    if orphaned_count > 0 {
+    // 1. Check for orphan AC nodes
+    let ac_reach_result = matchy_ac::validate_ac_reachability(
+        buffer,
+        header.ac_nodes_offset as usize,
+        header.ac_node_count as usize,
+    );
+    report.errors.extend(ac_reach_result.errors);
+    report.warnings.extend(ac_reach_result.warnings);
+    if ac_reach_result.stats.orphaned_count > 0 {
         report.warning(format!(
-            "Found {} orphaned AC nodes (not reachable from root)",
-            orphaned_count
+            "Found {} orphaned AC nodes (unreachable from root)",
+            ac_reach_result.stats.orphaned_count
         ));
-
-        // In audit mode, list the orphaned node indices
-        if !report.stats.trust_assumptions.is_empty() {
-            // Audit mode active
-            let orphaned_nodes: Vec<usize> = reachable
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, &r)| if !r { Some(idx) } else { None })
-                .take(10) // Limit to first 10 for readability
-                .collect();
-
-            report.info(format!(
-                "Orphaned node indices: {:?}{}",
-                orphaned_nodes,
-                if orphaned_count > 10 {
-                    format!(" ... and {} more", orphaned_count - 10)
-                } else {
-                    String::new()
-                }
-            ));
-        }
     } else {
         report.info("✓ All AC nodes are reachable from root");
     }
 
-    Ok(())
-}
-
-/// Validate that pattern-to-AC-node references are consistent
-fn validate_pattern_ac_consistency(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    if header.pattern_count == 0 {
-        return Ok(());
-    }
-
-    let nodes_offset = header.ac_nodes_offset as usize;
-    let node_count = header.ac_node_count as usize;
-
-    // Build a set of pattern IDs referenced by AC nodes
-    let mut patterns_referenced_by_nodes = HashSet::new();
-
-    for i in 0..node_count {
-        let node_offset = nodes_offset + i * mem::size_of::<ACNodeHot>();
-        if node_offset + mem::size_of::<ACNodeHot>() > buffer.len() {
-            continue;
-        }
-
-        let node = match ACNodeHot::read_from_prefix(&buffer[node_offset..]) {
-            Ok((n, _)) => n,
-            Err(_) => continue,
-        };
-
-        // Collect pattern IDs from this node
-        if node.pattern_count > 0 {
-            let patterns_offset = node.patterns_offset as usize;
-            let patterns_size = (node.pattern_count as usize) * mem::size_of::<u32>();
-
-            if patterns_offset + patterns_size <= buffer.len() {
-                for j in 0..(node.pattern_count as usize) {
-                    let pid_offset = patterns_offset + j * mem::size_of::<u32>();
-                    if pid_offset + 4 <= buffer.len() {
-                        let pattern_id = u32::from_le_bytes([
-                            buffer[pid_offset],
-                            buffer[pid_offset + 1],
-                            buffer[pid_offset + 2],
-                            buffer[pid_offset + 3],
-                        ]);
-
-                        patterns_referenced_by_nodes.insert(pattern_id);
-                    }
-                }
-            }
-        }
-    }
-
-    // Check that all literal patterns are referenced by at least one AC node
-    let patterns_offset = header.patterns_offset as usize;
-    let pattern_count = header.pattern_count as usize;
-    let mut unreferenced_literals = 0;
-
-    for i in 0..pattern_count {
-        let entry_offset = patterns_offset + i * mem::size_of::<PatternEntry>();
-        if entry_offset + mem::size_of::<PatternEntry>() > buffer.len() {
-            continue;
-        }
-
-        let entry = match PatternEntry::read_from_prefix(&buffer[entry_offset..]) {
-            Ok((e, _)) => e,
-            Err(_) => continue,
-        };
-
-        // Only check literal patterns (type 0)
-        if entry.pattern_type == 0 && !patterns_referenced_by_nodes.contains(&entry.pattern_id) {
-            unreferenced_literals += 1;
-        }
-    }
-
-    if unreferenced_literals > 0 {
-        report.warning(format!(
-            "Found {} literal patterns not referenced by any AC node",
-            unreferenced_literals
-        ));
-    } else {
-        report.info("✓ All literal patterns are referenced by AC nodes");
-    }
-
-    Ok(())
-}
-
-/// Validate AC literal mapping consistency (v3)
-fn validate_ac_literal_mapping_consistency(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    let map_offset = header.ac_literal_map_offset as usize;
-
-    if map_offset + 4 > buffer.len() {
-        return Ok(()); // Already reported earlier
-    }
-
-    // Read entry count
-    let entry_count = u32::from_le_bytes([
-        buffer[map_offset],
-        buffer[map_offset + 1],
-        buffer[map_offset + 2],
-        buffer[map_offset + 3],
-    ]) as usize;
-
-    let mut current_offset = map_offset + 4;
-    let mut referenced_patterns = HashSet::new();
-    let mut entries_checked = 0;
-
-    // Walk through variable-length entries
-    for i in 0..entry_count {
-        // Each entry: [literal_id: u32][pattern_count: u32][pattern_ids: u32...]
-        if current_offset + 8 > buffer.len() {
-            report.warning(format!(
-                "AC literal mapping truncated at entry {} of {}",
-                i, entry_count
-            ));
-            break;
-        }
-
-        let _literal_id = u32::from_le_bytes([
-            buffer[current_offset],
-            buffer[current_offset + 1],
-            buffer[current_offset + 2],
-            buffer[current_offset + 3],
-        ]);
-
-        let pattern_count = u32::from_le_bytes([
-            buffer[current_offset + 4],
-            buffer[current_offset + 5],
-            buffer[current_offset + 6],
-            buffer[current_offset + 7],
-        ]);
-
-        current_offset += 8;
-
-        // Read pattern IDs
-        let pattern_ids_size = (pattern_count as usize) * 4;
-        if current_offset + pattern_ids_size > buffer.len() {
-            report.warning(format!(
-                "AC literal mapping entry {} pattern IDs truncated",
-                i
-            ));
-            break;
-        }
-
-        for j in 0..pattern_count {
-            let pid_offset = current_offset + (j as usize) * 4;
-            let pattern_id = u32::from_le_bytes([
-                buffer[pid_offset],
-                buffer[pid_offset + 1],
-                buffer[pid_offset + 2],
-                buffer[pid_offset + 3],
-            ]);
-
-            if pattern_id >= header.pattern_count {
-                report.error(format!(
-                    "AC literal mapping entry {} references invalid pattern ID: {}",
-                    i, pattern_id
-                ));
-            } else {
-                referenced_patterns.insert(pattern_id);
-            }
-        }
-
-        current_offset += pattern_ids_size;
-        entries_checked += 1;
-    }
-
-    if entries_checked == entry_count {
-        report.info(format!(
-            "✓ AC literal mapping: validated {} entries, {} unique patterns",
-            entries_checked,
-            referenced_patterns.len()
-        ));
-    }
-
-    Ok(())
-}
-
-/// Validate data section mapping consistency (v2+)
-fn validate_data_mapping_consistency(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    let mapping_offset = header.mapping_table_offset as usize;
-    let mapping_count = header.mapping_count as usize;
-    let data_offset = header.data_section_offset as usize;
-    let data_size = header.data_section_size as usize;
-
-    let mut patterns_with_data = HashSet::new();
-    let mut duplicate_mappings = 0;
-
-    for i in 0..mapping_count {
-        let entry_offset = mapping_offset + i * mem::size_of::<PatternDataMapping>();
-        if entry_offset + mem::size_of::<PatternDataMapping>() > buffer.len() {
-            continue;
-        }
-
-        let mapping = match PatternDataMapping::read_from_prefix(&buffer[entry_offset..]) {
-            Ok((m, _)) => m,
-            Err(_) => continue,
-        };
-
-        // Check for duplicate pattern IDs in mapping table
-        if !patterns_with_data.insert(mapping.pattern_id) {
-            duplicate_mappings += 1;
-        }
-
-        // Validate pattern ID is valid
-        if mapping.pattern_id >= header.pattern_count {
-            // Already reported in earlier validation
-            continue;
-        }
-
-        // Validate inline data bounds if applicable
-        if header.has_inline_data() {
-            let data_ref = mapping.data_offset as usize;
-            // Check if this looks like an inline data reference
-            if data_ref >= data_offset && data_ref < data_offset + data_size {
-                let data_end = data_ref + mapping.data_size as usize;
-                if data_end > data_offset + data_size {
-                    // Already reported in earlier validation
-                    continue;
-                }
-            }
-        }
-    }
-
-    if duplicate_mappings > 0 {
-        report.warning(format!(
-            "Found {} duplicate pattern IDs in data mapping table",
-            duplicate_mappings
-        ));
-    } else {
-        report.info("✓ Data mapping table: no duplicate pattern IDs");
-    }
-
-    // Check coverage: how many patterns have associated data
-    let coverage_pct = if header.pattern_count > 0 {
-        (patterns_with_data.len() * 100) / header.pattern_count as usize
-    } else {
-        0
-    };
-
-    report.info(format!(
-        "Data mapping coverage: {}/{} patterns ({}%)",
-        patterns_with_data.len(),
-        header.pattern_count,
-        coverage_pct
-    ));
-
-    Ok(())
-}
-
-/// Validate meta-word mappings consistency
-fn validate_meta_word_consistency(
-    buffer: &[u8],
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    let mapping_offset = header.meta_word_mappings_offset as usize;
-    let mapping_count = header.meta_word_mapping_count as usize;
-
-    let mut referenced_patterns = HashSet::new();
-    let mut invalid_references = 0;
-
-    for i in 0..mapping_count {
-        let entry_offset = mapping_offset + i * mem::size_of::<MetaWordMapping>();
-        if entry_offset + mem::size_of::<MetaWordMapping>() > buffer.len() {
-            continue;
-        }
-
-        let mapping = match MetaWordMapping::read_from_prefix(&buffer[entry_offset..]) {
-            Ok((m, _)) => m,
-            Err(_) => continue,
-        };
-
-        // Validate meta-word string offset
-        if mapping.meta_word_offset as usize >= buffer.len() {
-            invalid_references += 1;
-        }
-
-        // Validate pattern IDs array offset and count
-        if mapping.pattern_count > 0 {
-            let pattern_ids_size = (mapping.pattern_count as usize) * mem::size_of::<u32>();
-            let pattern_ids_offset = mapping.pattern_ids_offset as usize;
-
-            if pattern_ids_offset + pattern_ids_size <= buffer.len() {
-                // Read and validate each pattern ID
-                for j in 0..mapping.pattern_count {
-                    let pid_offset = pattern_ids_offset + (j as usize) * mem::size_of::<u32>();
-                    if pid_offset + 4 <= buffer.len() {
-                        let pattern_id = u32::from_le_bytes([
-                            buffer[pid_offset],
-                            buffer[pid_offset + 1],
-                            buffer[pid_offset + 2],
-                            buffer[pid_offset + 3],
-                        ]);
-
-                        if pattern_id >= header.pattern_count {
-                            invalid_references += 1;
-                        } else {
-                            referenced_patterns.insert(pattern_id);
-                        }
-                    }
-                }
-            } else {
-                invalid_references += 1;
-            }
-        }
-    }
-
-    if invalid_references > 0 {
-        report.error(format!(
-            "Meta-word mappings contain {} invalid references",
-            invalid_references
-        ));
-    } else {
-        report.info(format!(
-            "✓ Meta-word mappings: {} entries, {} unique patterns referenced",
-            mapping_count,
-            referenced_patterns.len()
-        ));
-    }
-
-    Ok(())
-}
-
-/// Audit PARAGLOB performance characteristics
-fn audit_paraglob_performance(
-    header: &ParaglobHeader,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    // Memory usage estimates
-    let node_memory = (header.ac_node_count as usize) * mem::size_of::<ACNodeHot>();
-    let pattern_memory = (header.pattern_count as usize) * mem::size_of::<PatternEntry>();
-    let string_memory = header.pattern_strings_size as usize;
-    let data_memory = header.data_section_size as usize;
-
-    let total_memory = node_memory + pattern_memory + string_memory + data_memory;
-
-    report.info(format!(
-        "Memory usage: {} KB total ({} KB AC nodes, {} KB patterns, {} KB strings, {} KB data)",
-        total_memory / 1024,
-        node_memory / 1024,
-        pattern_memory / 1024,
-        string_memory / 1024,
-        data_memory / 1024
-    ));
-
-    // Performance warnings
-    if header.ac_node_count > 1_000_000 {
-        report.warning(format!(
-            "Large AC automaton ({} nodes) may impact load time and memory usage",
-            header.ac_node_count
-        ));
-    }
-
-    if header.pattern_count > 500_000 {
-        report.warning(format!(
-            "Large pattern count ({}) may impact query performance",
-            header.pattern_count
-        ));
-    }
-
-    // Check state encoding distribution efficiency
-    let empty_pct =
-        (report.stats.state_encoding_distribution[0] * 100) / header.ac_node_count.max(1);
-    let dense_pct =
-        (report.stats.state_encoding_distribution[3] * 100) / header.ac_node_count.max(1);
-
-    if dense_pct > 50 {
-        report.info(format!(
-            "High dense state usage ({}%) - good for performance but uses more memory",
-            dense_pct
-        ));
-    }
-
-    if empty_pct > 20 {
-        report.info(format!(
-            "Many empty nodes ({}%) - potential for optimization",
-            empty_pct
-        ));
-    }
-
-    Ok(())
-}
-
-/// Validate IP tree structure with full traversal
-/// Checks for cycles, invalid pointers, orphaned nodes, and structural integrity
-fn validate_ip_tree_structure(
-    buffer: &[u8],
-    tree_size: usize,
-    node_count: u32,
-    node_bytes: usize,
-    ip_version: u16,
-    report: &mut ValidationReport,
-) -> Result<()> {
-    if node_count == 0 {
-        return Ok(());
-    }
-
-    report.info("Performing deep IP tree traversal validation...".to_string());
-
-    // Track which nodes are visited during traversal
-    let mut visited = HashSet::new();
-    let mut traversal_errors = 0;
-    let mut cycle_detected = false;
-    let mut invalid_pointers = 0;
-
-    // Determine tree depth based on IP version
-    let tree_depth = match ip_version {
-        4 => 32,  // IPv4: 32 bits
-        6 => 128, // IPv6: 128 bits
-        _ => {
-            report.error(format!("Invalid IP version: {}", ip_version));
-            return Ok(());
-        }
-    };
-
-    // Traverse tree starting from root (node 0)
-    let result = traverse_ip_tree_node(
+    // 2. Validate pattern-AC consistency
+    let pattern_info = matchy_paraglob::build_pattern_info(
         buffer,
-        0, // Start at root
-        0, // Depth 0
-        tree_depth,
-        node_count,
-        node_bytes,
-        tree_size,
-        &mut visited,
-        &mut cycle_detected,
-        &mut invalid_pointers,
+        header.patterns_offset as usize,
+        header.pattern_count as usize,
+    )?;
+    let pattern_ref_result = matchy_ac::validate_pattern_references(
+        buffer,
+        header.ac_nodes_offset as usize,
+        header.ac_node_count as usize,
+        header.pattern_count,
+        Some(&pattern_info),
     );
+    report.errors.extend(pattern_ref_result.errors);
+    report.warnings.extend(pattern_ref_result.warnings);
 
-    if let Err(e) = result {
-        traversal_errors += 1;
-        report.error(format!("Tree traversal error: {}", e));
-    }
-
-    // Check for orphaned nodes (nodes that exist but aren't reachable)
-    let orphaned_count = (node_count as usize).saturating_sub(visited.len());
-    if orphaned_count > 0 {
-        report.warning(format!(
-            "Found {} orphaned nodes (exist in tree but unreachable from root)",
-            orphaned_count
-        ));
-    }
-
-    // Report statistics
-    report.info(format!(
-        "IP tree traversal: {} nodes visited out of {} total ({}% coverage)",
-        visited.len(),
-        node_count,
-        (visited.len() * 100) / node_count as usize
-    ));
-
-    if cycle_detected {
-        report.error(
-            "🚨 CRITICAL: Tree cycle detected - would cause infinite loops during IP lookup!"
-                .to_string(),
+    // 3. Validate AC literal mapping (v3)
+    if header.has_ac_literal_mapping() {
+        let ac_lit_result = matchy_paraglob::validate_ac_literal_mapping(
+            buffer,
+            header.ac_literal_map_offset as usize,
+            header.pattern_count,
         );
+        report.errors.extend(ac_lit_result.errors);
+        report.warnings.extend(ac_lit_result.warnings);
     }
 
-    if invalid_pointers > 0 {
-        report.error(format!(
-            "🚨 CRITICAL: {} invalid node pointers detected!",
-            invalid_pointers
+    // 4. Validate data mappings (v2+)
+    if header.has_data_section() && header.mapping_count > 0 {
+        let data_map_result = matchy_format::validate_data_mapping_consistency(buffer, header);
+        report.errors.extend(data_map_result.errors);
+        report.warnings.extend(data_map_result.warnings);
+        let coverage_pct = if header.pattern_count > 0 {
+            (data_map_result.stats.patterns_with_data * 100) / header.pattern_count as usize
+        } else {
+            0
+        };
+        report.info(format!(
+            "Data mapping coverage: {}/{} patterns ({}%)",
+            data_map_result.stats.patterns_with_data, header.pattern_count, coverage_pct
         ));
     }
 
-    if traversal_errors > 0 {
-        report.error(format!("Tree traversal found {} errors", traversal_errors));
+    // 5. Validate meta-word mappings
+    if header.meta_word_mapping_count > 0 {
+        let meta_result = matchy_paraglob::validate_meta_word_mappings(
+            buffer,
+            header.meta_word_mappings_offset as usize,
+            header.meta_word_mapping_count as usize,
+            header.pattern_count,
+        );
+        report.errors.extend(meta_result.errors);
+        report.warnings.extend(meta_result.warnings);
     }
 
-    Ok(())
-}
-
-/// Recursively traverse IP tree node and validate structure
-#[allow(clippy::too_many_arguments)]
-fn traverse_ip_tree_node(
-    buffer: &[u8],
-    node_index: u32,
-    depth: usize,
-    max_depth: usize,
-    node_count: u32,
-    node_bytes: usize,
-    tree_size: usize,
-    visited: &mut HashSet<u32>,
-    cycle_detected: &mut bool,
-    invalid_pointers: &mut usize,
-) -> std::result::Result<(), String> {
-    // Check for cycles
-    if visited.contains(&node_index) {
-        *cycle_detected = true;
-        return Err(format!("Cycle detected at node {}", node_index));
-    }
-
-    // Check depth (shouldn't exceed IP bit count)
-    if depth > max_depth {
-        return Err(format!(
-            "Tree depth {} exceeds maximum {} for this IP version",
-            depth, max_depth
-        ));
-    }
-
-    // Validate node index is in range
-    if node_index >= node_count {
-        *invalid_pointers += 1;
-        return Err(format!(
-            "Node index {} exceeds node count {}",
-            node_index, node_count
-        ));
-    }
-
-    visited.insert(node_index);
-
-    // Calculate node offset
-    let node_offset = (node_index as usize) * node_bytes;
-    if node_offset + node_bytes > tree_size {
-        return Err(format!(
-            "Node {} offset {} exceeds tree size {}",
-            node_index, node_offset, tree_size
-        ));
-    }
-
-    if node_offset + node_bytes > buffer.len() {
-        return Err(format!("Node {} would read beyond buffer", node_index));
-    }
-
-    // Read both records (left and right)
-    let (left_record, right_record) = match node_bytes {
-        6 => {
-            // 24-bit records
-            let left = (buffer[node_offset] as u32) << 16
-                | (buffer[node_offset + 1] as u32) << 8
-                | (buffer[node_offset + 2] as u32);
-            let right = (buffer[node_offset + 3] as u32) << 16
-                | (buffer[node_offset + 4] as u32) << 8
-                | (buffer[node_offset + 5] as u32);
-            (left, right)
-        }
-        7 => {
-            // 28-bit records (more complex bit packing)
-            // First 3.5 bytes: left record
-            // Last 3.5 bytes: right record
-            let left = (buffer[node_offset] as u32) << 20
-                | (buffer[node_offset + 1] as u32) << 12
-                | (buffer[node_offset + 2] as u32) << 4
-                | ((buffer[node_offset + 3] as u32) >> 4);
-            let right = ((buffer[node_offset + 3] as u32) & 0x0F) << 24
-                | (buffer[node_offset + 4] as u32) << 16
-                | (buffer[node_offset + 5] as u32) << 8
-                | (buffer[node_offset + 6] as u32);
-            (left, right)
-        }
-        8 => {
-            // 32-bit records
-            let left = u32::from_be_bytes([
-                buffer[node_offset],
-                buffer[node_offset + 1],
-                buffer[node_offset + 2],
-                buffer[node_offset + 3],
-            ]);
-            let right = u32::from_be_bytes([
-                buffer[node_offset + 4],
-                buffer[node_offset + 5],
-                buffer[node_offset + 6],
-                buffer[node_offset + 7],
-            ]);
-            (left, right)
-        }
-        _ => {
-            return Err(format!("Invalid node_bytes: {}", node_bytes));
-        }
-    };
-
-    // Validate and recurse into child nodes
-    // Records can be:
-    // - Node index (< node_count): pointer to another tree node
-    // - Data pointer (>= node_count): pointer to data section
-    // - Equal to node_count: no data (empty)
-
-    // Only recurse if we haven't reached maximum depth
-    if depth < max_depth {
-        // Validate left record
-        if left_record < node_count {
-            // It's a node pointer - recurse
-            traverse_ip_tree_node(
-                buffer,
-                left_record,
-                depth + 1,
-                max_depth,
-                node_count,
-                node_bytes,
-                tree_size,
-                visited,
-                cycle_detected,
-                invalid_pointers,
-            )?;
-        } else if left_record > node_count {
-            // It's a data pointer - validate it points to reasonable location
-            // (Already validated by validate_data_pointers)
-        }
-        // If left_record == node_count, it's empty (no data)
-
-        // Validate right record
-        if right_record < node_count {
-            // It's a node pointer - recurse
-            traverse_ip_tree_node(
-                buffer,
-                right_record,
-                depth + 1,
-                max_depth,
-                node_count,
-                node_bytes,
-                tree_size,
-                visited,
-                cycle_detected,
-                invalid_pointers,
-            )?;
-        } else if right_record > node_count {
-            // It's a data pointer - validate it points to reasonable location
-        }
-        // If right_record == node_count, it's empty
-    }
-
+    report.info("✓ PARAGLOB consistency checks complete");
     Ok(())
 }
 
@@ -2445,7 +1157,7 @@ fn validate_data_section_pointers(
     let data_section = &buffer[data_section_start..];
 
     // Sample data values and validate their pointer chains
-    let sample_count = if level == ValidationLevel::Strict || level == ValidationLevel::Audit {
+    let sample_count = if level == ValidationLevel::Strict {
         node_count.min(100) // More thorough sampling
     } else {
         node_count.min(20) // Basic sampling
@@ -2506,39 +1218,42 @@ fn validate_data_section_pointers(
             if data_offset < data_section.len() {
                 // Validate this data value and all its pointer chains
                 let mut visited = HashSet::new();
-                match validate_data_value_pointers(
+                match matchy_data_format::validate_data_value_pointers(
                     data_section,
                     data_offset,
                     &mut visited,
                     0,
-                    report,
                 ) {
                     Ok(depth) => {
                         pointers_checked += visited.len();
                         max_depth_found = max_depth_found.max(depth);
                     }
-                    Err(ValidationError::Cycle { offset }) => {
-                        cycles_detected += 1;
-                        report.error(format!(
-                            "Pointer cycle detected in data section at offset {}",
-                            offset
-                        ));
-                    }
-                    Err(ValidationError::DepthExceeded { depth }) => {
-                        report.error(format!(
-                            "Pointer chain depth {} exceeds safe limit (max: {})",
-                            depth, MAX_POINTER_DEPTH
-                        ));
-                    }
-                    Err(ValidationError::InvalidOffset { offset, reason }) => {
-                        invalid_pointers += 1;
-                        report.error(format!("Invalid pointer at offset {}: {}", offset, reason));
-                    }
-                    Err(ValidationError::InvalidType { offset, type_id }) => {
-                        report.error(format!(
-                            "Invalid data type {} at offset {}",
-                            type_id, offset
-                        ));
+                    Err(e) => {
+                        match e {
+                            matchy_data_format::PointerValidationError::Cycle { offset } => {
+                                cycles_detected += 1;
+                                report.error(format!(
+                                    "Pointer cycle detected in data section at offset {}",
+                                    offset
+                                ));
+                            }
+                            matchy_data_format::PointerValidationError::DepthExceeded { depth } => {
+                                report.error(format!(
+                                    "Pointer chain depth {} exceeds safe limit (max: {})",
+                                    depth, matchy_data_format::MAX_POINTER_DEPTH
+                                ));
+                            }
+                            matchy_data_format::PointerValidationError::InvalidOffset { offset, reason } => {
+                                invalid_pointers += 1;
+                                report.error(format!("Invalid pointer at offset {}: {}", offset, reason));
+                            }
+                            matchy_data_format::PointerValidationError::InvalidType { offset, type_id } => {
+                                report.error(format!(
+                                    "Invalid data type {} at offset {}",
+                                    type_id, offset
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -2566,467 +1281,6 @@ fn validate_data_section_pointers(
             invalid_pointers
         ));
     }
-
-    Ok(())
-}
-
-/// Maximum safe depth for pointer chains
-const MAX_POINTER_DEPTH: usize = 32;
-
-/// Maximum reasonable total nesting depth (arrays/maps + pointers)
-const MAX_TOTAL_DEPTH: usize = 64;
-
-/// Validation error types for data section
-#[derive(Debug)]
-enum ValidationError {
-    Cycle { offset: usize },
-    DepthExceeded { depth: usize },
-    InvalidOffset { offset: usize, reason: String },
-    InvalidType { offset: usize, type_id: u8 },
-}
-
-/// Validate a data value and all pointers it contains
-/// Returns the maximum depth of pointer chains encountered
-/// Detects cycles using the visited set
-fn validate_data_value_pointers(
-    data_section: &[u8],
-    offset: usize,
-    visited: &mut HashSet<usize>,
-    depth: usize,
-    _report: &mut ValidationReport,
-) -> std::result::Result<usize, ValidationError> {
-    // Check depth limit (use MAX_TOTAL_DEPTH for combined nesting)
-    if depth > MAX_TOTAL_DEPTH {
-        return Err(ValidationError::DepthExceeded { depth });
-    }
-
-    // Check for cycles
-    if visited.contains(&offset) {
-        return Err(ValidationError::Cycle { offset });
-    }
-
-    visited.insert(offset);
-
-    // Validate offset bounds
-    if offset >= data_section.len() {
-        return Err(ValidationError::InvalidOffset {
-            offset,
-            reason: "Offset beyond data section".to_string(),
-        });
-    }
-
-    // Read control byte
-    let ctrl = data_section[offset];
-    let type_id = ctrl >> 5;
-    let payload = ctrl & 0x1F;
-
-    let mut cursor = offset + 1;
-    let mut max_child_depth = depth;
-
-    match type_id {
-        0 => {
-            // Extended type
-            if cursor >= data_section.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset,
-                    reason: "Extended type truncated".to_string(),
-                });
-            }
-            let raw_ext_type = data_section[cursor];
-            cursor += 1;
-            let ext_type_id = 7 + raw_ext_type;
-
-            match ext_type_id {
-                11 => {
-                    // Array - validate all elements
-                    let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
-                    for _ in 0..count {
-                        let child_depth = validate_data_value_pointers(
-                            data_section,
-                            cursor,
-                            visited,
-                            depth + 1,
-                            _report,
-                        )?;
-                        max_child_depth = max_child_depth.max(child_depth);
-                        // Skip past this element (approximate)
-                        cursor = skip_data_value(data_section, cursor)?;
-                    }
-                }
-                8 | 9 | 10 | 14 | 15 => {
-                    // Int32, Uint64, Uint128, Bool, Float - no pointers
-                }
-                _ => {
-                    return Err(ValidationError::InvalidType {
-                        offset,
-                        type_id: ext_type_id,
-                    });
-                }
-            }
-        }
-        1 => {
-            // Pointer - this is critical to validate!
-            let pointer_offset = decode_pointer_offset(data_section, &mut cursor, payload)?;
-
-            // Validate pointer target
-            if pointer_offset >= data_section.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: pointer_offset,
-                    reason: "Pointer target beyond data section".to_string(),
-                });
-            }
-
-            // Recursively validate pointed-to value
-            let child_depth = validate_data_value_pointers(
-                data_section,
-                pointer_offset,
-                visited,
-                depth + 1,
-                _report,
-            )?;
-            max_child_depth = max_child_depth.max(child_depth);
-        }
-        2..=6 => {
-            // String, Double, Bytes, Uint16, Uint32 - no pointers, just validate bounds
-            // (already validated by UTF-8 check for strings)
-        }
-        7 => {
-            // Map - validate all values
-            let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
-            for _ in 0..count {
-                // Skip key (string)
-                cursor = skip_data_value(data_section, cursor)?;
-                // Validate value
-                let child_depth = validate_data_value_pointers(
-                    data_section,
-                    cursor,
-                    visited,
-                    depth + 1,
-                    _report,
-                )?;
-                max_child_depth = max_child_depth.max(child_depth);
-                cursor = skip_data_value(data_section, cursor)?;
-            }
-        }
-        _ => {
-            return Err(ValidationError::InvalidType { offset, type_id });
-        }
-    }
-
-    Ok(max_child_depth)
-}
-
-/// Decode size field for validation (similar to DataDecoder but for validation)
-fn decode_size_for_validation(
-    data: &[u8],
-    cursor: &mut usize,
-    size_bits: u8,
-) -> std::result::Result<usize, ValidationError> {
-    match size_bits {
-        0..=28 => Ok(size_bits as usize),
-        29 => {
-            if *cursor >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Size byte out of bounds".to_string(),
-                });
-            }
-            let size = data[*cursor] as usize;
-            *cursor += 1;
-            Ok(29 + size)
-        }
-        30 => {
-            if *cursor + 2 > data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Size bytes out of bounds".to_string(),
-                });
-            }
-            let size = u16::from_be_bytes([data[*cursor], data[*cursor + 1]]) as usize;
-            *cursor += 2;
-            Ok(29 + 256 + size)
-        }
-        31 => {
-            if *cursor + 3 > data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Size bytes out of bounds".to_string(),
-                });
-            }
-            let b0 = data[*cursor] as usize;
-            let b1 = data[*cursor + 1] as usize;
-            let b2 = data[*cursor + 2] as usize;
-            *cursor += 3;
-            Ok(29 + 256 + 65536 + ((b0 << 16) | (b1 << 8) | b2))
-        }
-        _ => Err(ValidationError::InvalidOffset {
-            offset: *cursor,
-            reason: "Invalid size encoding".to_string(),
-        }),
-    }
-}
-
-/// Decode pointer offset for validation
-fn decode_pointer_offset(
-    data: &[u8],
-    cursor: &mut usize,
-    payload: u8,
-) -> std::result::Result<usize, ValidationError> {
-    let size_bits = (payload >> 3) & 0x3;
-
-    let offset = match size_bits {
-        0 => {
-            if *cursor >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Pointer data truncated".to_string(),
-                });
-            }
-            let low_3_bits = (payload & 0x7) as usize;
-            let next_byte = data[*cursor] as usize;
-            *cursor += 1;
-            (low_3_bits << 8) | next_byte
-        }
-        1 => {
-            if *cursor + 1 >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Pointer data truncated".to_string(),
-                });
-            }
-            let low_3_bits = (payload & 0x7) as usize;
-            let b0 = data[*cursor] as usize;
-            let b1 = data[*cursor + 1] as usize;
-            *cursor += 2;
-            2048 + ((low_3_bits << 16) | (b0 << 8) | b1)
-        }
-        2 => {
-            if *cursor + 2 >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Pointer data truncated".to_string(),
-                });
-            }
-            let low_3_bits = (payload & 0x7) as usize;
-            let b0 = data[*cursor] as usize;
-            let b1 = data[*cursor + 1] as usize;
-            let b2 = data[*cursor + 2] as usize;
-            *cursor += 3;
-            526336 + ((low_3_bits << 24) | (b0 << 16) | (b1 << 8) | b2)
-        }
-        3 => {
-            if *cursor + 3 >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset: *cursor,
-                    reason: "Pointer data truncated".to_string(),
-                });
-            }
-            let b0 = data[*cursor] as usize;
-            let b1 = data[*cursor + 1] as usize;
-            let b2 = data[*cursor + 2] as usize;
-            let b3 = data[*cursor + 3] as usize;
-            *cursor += 4;
-            (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
-        }
-        _ => {
-            return Err(ValidationError::InvalidOffset {
-                offset: *cursor,
-                reason: "Invalid pointer size bits".to_string(),
-            });
-        }
-    };
-
-    Ok(offset)
-}
-
-/// Skip past a data value (returns offset after the value)
-fn skip_data_value(data: &[u8], offset: usize) -> std::result::Result<usize, ValidationError> {
-    if offset >= data.len() {
-        return Err(ValidationError::InvalidOffset {
-            offset,
-            reason: "Offset beyond data".to_string(),
-        });
-    }
-
-    let ctrl = data[offset];
-    let type_id = ctrl >> 5;
-    let payload = ctrl & 0x1F;
-    let mut cursor = offset + 1;
-
-    match type_id {
-        0 => {
-            // Extended type
-            if cursor >= data.len() {
-                return Err(ValidationError::InvalidOffset {
-                    offset,
-                    reason: "Extended type truncated".to_string(),
-                });
-            }
-            cursor += 1; // Skip extended type byte
-                         // Approximate skip (actual size depends on extended type)
-            let size = decode_size_for_validation(data, &mut cursor, payload)?;
-            Ok(cursor + size)
-        }
-        1 => {
-            // Pointer - determine size from payload
-            let size_bits = (payload >> 3) & 0x3;
-            let ptr_size = match size_bits {
-                0 => 1,
-                1 => 2,
-                2 => 3,
-                3 => 4,
-                _ => 0,
-            };
-            Ok(cursor + ptr_size)
-        }
-        2 | 4 => {
-            // String or Bytes
-            let size = decode_size_for_validation(data, &mut cursor, payload)?;
-            Ok(cursor + size)
-        }
-        3 => Ok(cursor + 8), // Double
-        5 => {
-            // Uint16
-            let size = decode_size_for_validation(data, &mut cursor, payload)?;
-            Ok(cursor + size.min(2))
-        }
-        6 => {
-            // Uint32
-            let size = decode_size_for_validation(data, &mut cursor, payload)?;
-            Ok(cursor + size.min(4))
-        }
-        7 => {
-            // Map - need to skip all key-value pairs
-            let count = decode_size_for_validation(data, &mut cursor, payload)?;
-            for _ in 0..count {
-                cursor = skip_data_value(data, cursor)?; // Skip key
-                cursor = skip_data_value(data, cursor)?; // Skip value
-            }
-            Ok(cursor)
-        }
-        _ => Err(ValidationError::InvalidType { offset, type_id }),
-    }
-}
-
-/// Audit all unsafe code paths in the codebase
-/// Documents where unsafe operations occur and their justifications
-fn audit_unsafe_code_paths(report: &mut ValidationReport) -> Result<()> {
-    // Document unsafe operations in paraglob_offset.rs
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "paraglob_offset.rs::find_all() - wildcard matching".to_string(),
-        operation: UnsafeOperation::UncheckedStringRead,
-        justification: "read_str_unchecked used in trusted mode for 15-20% performance gain. Bypasses UTF-8 validation.".to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "paraglob_offset.rs::find_all() - candidate verification".to_string(),
-        operation: UnsafeOperation::UncheckedStringRead,
-        justification: "read_str_unchecked used in trusted mode for glob pattern strings. Assumes pre-validated UTF-8.".to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "paraglob_offset.rs::from_mmap_trusted()".to_string(),
-        operation: UnsafeOperation::MmapLifetimeExtension,
-        justification:
-            "Extends slice lifetime to 'static for mmap. Assumes caller maintains mmap validity."
-                .to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "paraglob_offset.rs::from_buffer_with_trust() - AC literal hash".to_string(),
-        operation: UnsafeOperation::MmapLifetimeExtension,
-        justification: "Extends buffer slice lifetime to 'static for ACLiteralHash. Safe because buffer is owned by struct.".to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "database.rs::load_pattern_section()".to_string(),
-        operation: UnsafeOperation::MmapLifetimeExtension,
-        justification: "Uses from_mmap or from_mmap_trusted with 'static lifetime from mmap. Validity depends on Database lifetime.".to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "database.rs::load_combined_pattern_section()".to_string(),
-        operation: UnsafeOperation::MmapLifetimeExtension,
-        justification: "Zero-copy mmap loading with 'static lifetime. Trusts mmap remains valid."
-            .to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "offset_format.rs::read_str_unchecked()".to_string(),
-        operation: UnsafeOperation::UncheckedStringRead,
-        justification: "Core unsafe function for reading strings without UTF-8 validation. Used throughout trusted mode.".to_string(),
-    });
-
-    report.stats.unsafe_code_locations.push(UnsafeCodeLocation {
-        location: "offset_format.rs - zerocopy transmutes".to_string(),
-        operation: UnsafeOperation::Transmute,
-        justification: "Zerocopy FromBytes trait uses transmute for #[repr(C)] structs. Safe due to explicit layout control.".to_string(),
-    });
-
-    // Info only - this is for audit documentation, not a problem with this database
-    let unsafe_count = report.stats.unsafe_code_locations.len();
-    report.info(format!(
-        "Audit: Documented {} unsafe code locations in matchy codebase",
-        unsafe_count
-    ));
-
-    Ok(())
-}
-
-/// Audit trust mode risks - what validation would be bypassed
-fn audit_trust_mode_risks(buffer: &[u8], report: &mut ValidationReport) -> Result<()> {
-    // Check if database has pattern section (would use trusted mode)
-    let has_pattern_section = buffer.len() >= 8 && &buffer[0..8] == b"PARAGLOB";
-
-    if has_pattern_section {
-        report.stats.trust_assumptions.push(TrustAssumption {
-            context: "PARAGLOB pattern section loading".to_string(),
-            bypassed_check: "UTF-8 validation of all pattern strings".to_string(),
-            risk: "Invalid UTF-8 in pattern strings could cause UB when treated as &str. Must validate database before using --trusted.".to_string(),
-        });
-
-        report.stats.trust_assumptions.push(TrustAssumption {
-            context: "Pattern matching with read_str_unchecked".to_string(),
-            bypassed_check: "Bounds checking and UTF-8 validation during queries".to_string(),
-            risk: "Corrupted offsets or lengths could read out-of-bounds. Malformed UTF-8 causes undefined behavior.".to_string(),
-        });
-    }
-
-    // Check for MMDB data section
-    if let Ok(metadata) = crate::mmdb::MmdbMetadata::from_file(buffer) {
-        if let Ok(crate::DataValue::Map(_)) = metadata.as_value() {
-            report.stats.trust_assumptions.push(TrustAssumption {
-                context: "MMDB data section strings".to_string(),
-                bypassed_check: "UTF-8 validation of data section strings in trusted mode"
-                    .to_string(),
-                risk: "Invalid UTF-8 in IP lookup results could cause UB when decoded as strings."
-                    .to_string(),
-            });
-        }
-    }
-
-    report.stats.trust_assumptions.push(TrustAssumption {
-        context: "Memory-mapped file loading".to_string(),
-        bypassed_check: "File integrity during mmap lifetime".to_string(),
-        risk: "If file is modified while mmap'd, data could change causing inconsistencies or crashes.".to_string(),
-    });
-
-    report.stats.trust_assumptions.push(TrustAssumption {
-        context: "Offset-based data structures".to_string(),
-        bypassed_check: "Alignment and bounds checks in trusted mode".to_string(),
-        risk: "Misaligned offsets could cause crashes on platforms requiring strict alignment. Out-of-bounds offsets cause memory corruption.".to_string(),
-    });
-
-    // Info only - this is educational about --trusted mode in general, not about this database
-    let assumption_count = report.stats.trust_assumptions.len();
-    report.info(format!(
-        "Audit: --trusted mode bypasses {} validation checks for performance",
-        assumption_count
-    ));
-    report.info(
-        "Note: This database passed all validation checks. Info above is for audit documentation."
-            .to_string(),
-    );
 
     Ok(())
 }
@@ -3079,14 +1333,11 @@ mod tests {
 
     #[test]
     fn test_validation_levels() {
-        // Test that all validation levels are distinct
+        // Test that validation levels are distinct
         let standard = ValidationLevel::Standard;
         let strict = ValidationLevel::Strict;
-        let audit = ValidationLevel::Audit;
 
         assert_ne!(standard, strict);
-        assert_ne!(strict, audit);
-        assert_ne!(standard, audit);
     }
 
     #[test]
@@ -3134,25 +1385,6 @@ mod tests {
     }
 
     #[test]
-    fn test_audit_mode_requires_valid_mmdb() {
-        // Audit tracking only happens for databases with valid MMDB metadata
-        // For invalid files, we fail early before reaching audit code
-        let temp = NamedTempFile::new().unwrap();
-        let db_bytes = vec![0u8; 1024];
-        std::fs::write(temp.path(), db_bytes).unwrap();
-
-        let result = validate_database(temp.path(), ValidationLevel::Audit);
-        assert!(result.is_ok());
-
-        let report = result.unwrap();
-        // Invalid database fails before audit tracking happens
-        assert!(!report.is_valid());
-        assert!(report.errors.iter().any(|e| e.contains("MMDB")));
-        // No unsafe locations tracked for invalid databases
-        assert!(report.stats.unsafe_code_locations.is_empty());
-    }
-
-    #[test]
     fn test_strict_mode_runs_deep_checks() {
         // Create a minimal but valid-ish MMDB structure for testing
         // This is a simplified test - real validation needs proper MMDB format
@@ -3186,19 +1418,6 @@ mod tests {
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(report.info.len(), 1);
         assert!(!report.is_valid());
-    }
-
-    #[test]
-    fn test_unsafe_operation_types() {
-        // Test that unsafe operation types are distinct
-        let op1 = UnsafeOperation::UncheckedStringRead;
-        let op2 = UnsafeOperation::PointerDereference;
-        let op3 = UnsafeOperation::MmapLifetimeExtension;
-        let op4 = UnsafeOperation::Transmute;
-
-        assert_ne!(op1, op2);
-        assert_ne!(op2, op3);
-        assert_ne!(op3, op4);
     }
 
     #[test]
