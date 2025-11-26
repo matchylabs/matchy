@@ -189,7 +189,7 @@ pub use crate::error::{FormatError, ParaglobError};
 /// let db_bytes = builder.build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+pub use matchy_format::mmdb_builder::DatabaseBuilder;
 
 /// Entry type classification for database builder
 ///

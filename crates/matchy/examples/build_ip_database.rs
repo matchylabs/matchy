@@ -1,8 +1,8 @@
-//! Example: Building an IP address database with MmdbBuilder
+//! Example: Building an IP address database with DatabaseBuilder
 //!
 //! Demonstrates how to build a database with IP addresses and CIDR ranges.
 
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Building IP address database...\n");
 
     // Create a builder
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add some IP addresses with associated data
     println!("Adding IP entries:");

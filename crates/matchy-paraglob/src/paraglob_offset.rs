@@ -22,8 +22,8 @@ use crate::offset_format::{
     SingleWildcard,
 };
 use matchy_ac::ACAutomaton;
-use matchy_match_mode::MatchMode;
 use matchy_data_format::{DataEncoder, DataValue};
+use matchy_match_mode::MatchMode;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;

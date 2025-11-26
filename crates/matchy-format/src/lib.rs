@@ -20,5 +20,5 @@ pub use validation::{validate_data_mapping_consistency, FormatStats, FormatValid
 // Re-exports for convenience
 pub use error::FormatError;
 pub use matchy_literal_hash;
-pub use mmdb_builder::MmdbBuilder;
+pub use mmdb_builder::DatabaseBuilder;
 pub use offset_format::*;

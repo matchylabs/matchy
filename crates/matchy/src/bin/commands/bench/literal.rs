@@ -16,13 +16,13 @@ pub fn bench_literal_database(config: BenchConfig) -> Result<()> {
         cache_size,
         cache_hit_rate,
     } = config;
-    use matchy::mmdb_builder::MmdbBuilder;
+    use matchy::mmdb_builder::DatabaseBuilder;
     use matchy::Database;
     use matchy::MatchMode;
 
     println!("--- Phase 1: Build Literal Database ---");
     let build_start = Instant::now();
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
         .with_database_type("Benchmark-Literal")
         .with_description("en", "Literal database benchmark");
 

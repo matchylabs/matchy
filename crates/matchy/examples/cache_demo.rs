@@ -3,7 +3,7 @@
 //! This example shows how to configure and use the LRU cache for
 //! high-throughput workloads with repeated queries.
 
-use matchy::{mmdb_builder::MmdbBuilder, DataValue, Database, MatchMode};
+use matchy::{mmdb_builder::DatabaseBuilder, DataValue, Database, MatchMode};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build a small test database
     println!("1. Building test database...");
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
         .with_database_type("Cache-Demo")
         .with_description("en", "Caching demonstration database");
 

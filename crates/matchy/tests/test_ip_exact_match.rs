@@ -4,7 +4,7 @@
 //! only those exact IPs are matched, not broader CIDR ranges.
 
 use matchy::database::Database;
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 #[test]
 fn test_exact_ip_matching_no_overmatch() {
     // Insert specific IPs: 0.0.0.1, 0.0.0.3, 0.0.0.5
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     builder.add_ip("0.0.0.1", empty_data.clone()).unwrap();
@@ -88,7 +88,7 @@ fn test_exact_ip_matching_no_overmatch() {
 #[test]
 fn test_sequential_ips_no_range_expansion() {
     // Insert 10 sequential IPs
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     for i in 0..10 {
@@ -140,7 +140,7 @@ fn test_sequential_ips_no_range_expansion() {
 #[test]
 fn test_sparse_ips_no_implicit_ranges() {
     // Insert IPs with gaps: 192.168.1.1, 192.168.1.100, 192.168.1.200
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     builder.add_ip("192.168.1.1", empty_data.clone()).unwrap();
@@ -198,7 +198,7 @@ fn test_sparse_ips_no_implicit_ranges() {
 #[test]
 fn test_cidr_vs_individual_ips() {
     // Insert a CIDR block and individual IPs to ensure they work differently
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let mut cidr_data = HashMap::new();
     cidr_data.insert("type".to_string(), DataValue::String("cidr".to_string()));
 

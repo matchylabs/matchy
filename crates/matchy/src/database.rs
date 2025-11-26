@@ -1840,7 +1840,7 @@ mod tests {
 
     #[test]
     fn test_reload_callback() {
-        use crate::mmdb_builder::MmdbBuilder;
+        use crate::mmdb_builder::DatabaseBuilder;
         use crate::{DataValue, MatchMode};
         use std::collections::HashMap;
         use std::fs;
@@ -1852,7 +1852,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.mxy");
 
         // Build a simple test database with a literal string
-        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
         let mut data = HashMap::new();
         data.insert("test".to_string(), DataValue::String("initial".to_string()));
         builder.add_literal("example.com", data).unwrap();
@@ -1878,7 +1878,7 @@ mod tests {
 
         // Modify the database file (trigger reload)
         std::thread::sleep(Duration::from_millis(100));
-        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
         let mut data = HashMap::new();
         data.insert(
             "test".to_string(),

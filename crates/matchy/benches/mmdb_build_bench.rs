@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ fn bench_mmdb_build_with_deduplication(c: &mut Criterion) {
             entry_count,
             |b, &count| {
                 b.iter(|| {
-                    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+                    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
                     for i in 0..count {
                         let ip = format!("192.168.{}.{}", i / 256, i % 256);
                         // Cycle through the 10 data values
@@ -55,7 +55,7 @@ fn bench_mmdb_build_with_deduplication(c: &mut Criterion) {
             entry_count,
             |b, &count| {
                 b.iter(|| {
-                    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+                    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
                     for i in 0..count {
                         let ip = format!("192.168.{}.{}", i / 256, i % 256);
                         let mut data = HashMap::new();
@@ -90,7 +90,7 @@ fn bench_mmdb_build_with_deduplication(c: &mut Criterion) {
             entry_count,
             |b, &count| {
                 b.iter(|| {
-                    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+                    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
                     for i in 0..count {
                         let ip = format!("192.168.{}.{}", i / 256, i % 256);
                         let data = medium_dedup_data[i % 50].clone();
@@ -108,7 +108,7 @@ fn bench_mmdb_build_with_deduplication(c: &mut Criterion) {
             entry_count,
             |b, &count| {
                 b.iter(|| {
-                    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+                    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
                     for i in 0..count {
                         let data = high_dedup_data[i % 10].clone();
                         if i % 3 == 0 {
@@ -186,7 +186,7 @@ fn bench_mmdb_build_complex_data(c: &mut Criterion) {
             entry_count,
             |b, &count| {
                 b.iter(|| {
-                    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+                    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
                     for i in 0..count {
                         let data = threat_categories[i % 5].clone();
                         if i % 2 == 0 {

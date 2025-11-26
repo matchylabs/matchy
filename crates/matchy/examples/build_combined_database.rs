@@ -3,7 +3,7 @@
 //! This demonstrates the POWER of the extended MMDB format:
 //! A single database that can query both IP addresses AND patterns!
 
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(80));
 
     // Create a builder
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // ========== ADD IP ADDRESSES ==========
     println!("\n📍 Adding IP address entries:");

@@ -4,7 +4,7 @@
 // the lookup for that IP fails to return the most specific match.
 
 use matchy::database::{Database, QueryResult};
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 #[test]
 fn test_ip_specific_before_subnet() {
     // This test reproduces the bug: /32 loaded BEFORE /24
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add single IP FIRST (192.0.2.1/32)
     let mut data1 = HashMap::new();
@@ -83,7 +83,7 @@ fn test_ip_specific_before_subnet() {
 #[test]
 fn test_ip_specific_after_subnet() {
     // This test should work: /32 loaded AFTER /24
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add broader subnet FIRST (192.0.2.0/24)
     let mut data2 = HashMap::new();
@@ -154,7 +154,7 @@ fn test_ip_specific_after_subnet() {
 #[test]
 fn test_multiple_overlapping_prefixes() {
     // Test with multiple overlapping prefixes of different lengths
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add in order: /8 -> /32 -> /24
     let mut data1 = HashMap::new();
@@ -213,7 +213,7 @@ fn test_multiple_overlapping_prefixes() {
 #[test]
 fn test_simple_two_level() {
     // Simpler test: just /24 and /32
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add /32 first
     let mut data1 = HashMap::new();
@@ -264,7 +264,7 @@ fn test_simple_two_level() {
 #[test]
 fn test_ipv6_longest_prefix_match() {
     // Test that IPv6 also handles longest prefix matching correctly
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
     // Add /64 first, then /128, then /96 (out of order)
     let mut data1 = HashMap::new();

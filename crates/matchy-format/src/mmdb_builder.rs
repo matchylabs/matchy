@@ -39,7 +39,7 @@ struct EntryRef {
 }
 
 /// Unified database builder
-pub struct MmdbBuilder {
+pub struct DatabaseBuilder {
     /// Lightweight entry references (key + offset only)
     entries: Vec<EntryRef>,
     /// Data encoder for streaming data encoding
@@ -53,7 +53,7 @@ pub struct MmdbBuilder {
     description: HashMap<String, String>,
 }
 
-impl MmdbBuilder {
+impl DatabaseBuilder {
     /// Create a new builder
     pub fn new(match_mode: MatchMode) -> Self {
         Self {
@@ -72,10 +72,10 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy_format::mmdb_builder::MmdbBuilder;
+    /// use matchy_format::mmdb_builder::DatabaseBuilder;
     /// use matchy_match_mode::MatchMode;
     ///
-    /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    /// let builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
     ///     .with_database_type("MyCompany-ThreatIntel");
     /// ```
     pub fn with_database_type(mut self, db_type: impl Into<String>) -> Self {
@@ -90,10 +90,10 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy_format::mmdb_builder::MmdbBuilder;
+    /// use matchy_format::mmdb_builder::DatabaseBuilder;
     /// use matchy_match_mode::MatchMode;
     ///
-    /// let builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    /// let builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
     ///     .with_description("en", "My custom threat database")
     ///     .with_description("es", "Mi base de datos de amenazas personalizada");
     /// ```
@@ -133,7 +133,7 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -165,7 +165,7 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -222,7 +222,7 @@ impl MmdbBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::MmdbBuilder as DatabaseBuilder;
+    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -292,16 +292,16 @@ impl MmdbBuilder {
     ///
     /// # Examples
     /// ```
-    /// # use matchy_format::mmdb_builder::{MmdbBuilder, EntryType};
+    /// # use matchy_format::mmdb_builder::{DatabaseBuilder, EntryType};
     /// # use matchy_match_mode::MatchMode;
     /// // Auto-detection
-    /// assert!(matches!(MmdbBuilder::detect_entry_type("1.2.3.4"), Ok(EntryType::IpAddress { .. })));
-    /// assert!(matches!(MmdbBuilder::detect_entry_type("*.example.com"), Ok(EntryType::Glob(_))));
-    /// assert!(matches!(MmdbBuilder::detect_entry_type("evil.com"), Ok(EntryType::Literal(_))));
+    /// assert!(matches!(DatabaseBuilder::detect_entry_type("1.2.3.4"), Ok(EntryType::IpAddress { .. })));
+    /// assert!(matches!(DatabaseBuilder::detect_entry_type("*.example.com"), Ok(EntryType::Glob(_))));
+    /// assert!(matches!(DatabaseBuilder::detect_entry_type("evil.com"), Ok(EntryType::Literal(_))));
     ///
     /// // Explicit type control
-    /// assert!(matches!(MmdbBuilder::detect_entry_type("literal:*.not-a-glob.com"), Ok(EntryType::Literal(_))));
-    /// assert!(matches!(MmdbBuilder::detect_entry_type("glob:no-wildcards.com"), Ok(EntryType::Glob(_))));
+    /// assert!(matches!(DatabaseBuilder::detect_entry_type("literal:*.not-a-glob.com"), Ok(EntryType::Literal(_))));
+    /// assert!(matches!(DatabaseBuilder::detect_entry_type("glob:no-wildcards.com"), Ok(EntryType::Glob(_))));
     /// ```
     pub fn detect_entry_type(key: &str) -> Result<EntryType, FormatError> {
         // Check for explicit type prefixes first
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_detect_ip_address() {
-        let result = MmdbBuilder::detect_entry_type("8.8.8.8").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("8.8.8.8").unwrap();
         match result {
             EntryType::IpAddress { addr, prefix_len } => {
                 assert_eq!(addr.to_string(), "8.8.8.8");
@@ -727,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_detect_cidr() {
-        let result = MmdbBuilder::detect_entry_type("192.168.0.0/16").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("192.168.0.0/16").unwrap();
         match result {
             EntryType::IpAddress { addr, prefix_len } => {
                 assert_eq!(addr.to_string(), "192.168.0.0");
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_detect_ipv6() {
-        let result = MmdbBuilder::detect_entry_type("2001:4860:4860::8888").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("2001:4860:4860::8888").unwrap();
         match result {
             EntryType::IpAddress { addr, prefix_len } => {
                 assert!(addr.is_ipv6());
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn test_detect_pattern_wildcard() {
-        let result = MmdbBuilder::detect_entry_type("*.evil.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("*.evil.com").unwrap();
         match result {
             EntryType::Glob(p) => assert_eq!(p, "*.evil.com"),
             _ => panic!("Expected glob pattern"),
@@ -760,7 +760,7 @@ mod tests {
 
     #[test]
     fn test_detect_pattern_literal() {
-        let result = MmdbBuilder::detect_entry_type("evil.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("evil.com").unwrap();
         match result {
             EntryType::Literal(p) => assert_eq!(p, "evil.com"),
             _ => panic!("Expected literal pattern"),
@@ -772,7 +772,7 @@ mod tests {
     #[test]
     fn test_literal_prefix_forces_literal() {
         // String with glob chars should normally be a glob, but prefix forces literal
-        let result = MmdbBuilder::detect_entry_type("literal:*.not-a-glob.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("literal:*.not-a-glob.com").unwrap();
         match result {
             EntryType::Literal(p) => assert_eq!(p, "*.not-a-glob.com"),
             _ => panic!("Expected literal, got: {:?}", result),
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn test_literal_prefix_strips_correctly() {
-        let result = MmdbBuilder::detect_entry_type("literal:evil.example.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("literal:evil.example.com").unwrap();
         match result {
             EntryType::Literal(p) => {
                 assert_eq!(p, "evil.example.com");
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn test_glob_prefix_forces_glob() {
         // String without wildcards should normally be literal, but prefix forces glob
-        let result = MmdbBuilder::detect_entry_type("glob:no-wildcards.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("glob:no-wildcards.com").unwrap();
         match result {
             EntryType::Glob(p) => assert_eq!(p, "no-wildcards.com"),
             _ => panic!("Expected glob, got: {:?}", result),
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn test_glob_prefix_with_wildcards() {
-        let result = MmdbBuilder::detect_entry_type("glob:*.evil.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("glob:*.evil.com").unwrap();
         match result {
             EntryType::Glob(p) => {
                 assert_eq!(p, "*.evil.com");
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn test_glob_prefix_invalid_pattern() {
         // If explicitly marked as glob but has invalid glob syntax, should error
-        let result = MmdbBuilder::detect_entry_type("glob:[unclosed");
+        let result = DatabaseBuilder::detect_entry_type("glob:[unclosed");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -826,7 +826,7 @@ mod tests {
 
     #[test]
     fn test_ip_prefix_forces_ip() {
-        let result = MmdbBuilder::detect_entry_type("ip:8.8.8.8").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("ip:8.8.8.8").unwrap();
         match result {
             EntryType::IpAddress { addr, prefix_len } => {
                 assert_eq!(addr.to_string(), "8.8.8.8");
@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn test_ip_prefix_with_cidr() {
-        let result = MmdbBuilder::detect_entry_type("ip:10.0.0.0/8").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("ip:10.0.0.0/8").unwrap();
         match result {
             EntryType::IpAddress { addr, prefix_len } => {
                 assert_eq!(addr.to_string(), "10.0.0.0");
@@ -850,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_ip_prefix_invalid_ip() {
-        let result = MmdbBuilder::detect_entry_type("ip:not-an-ip");
+        let result = DatabaseBuilder::detect_entry_type("ip:not-an-ip");
         assert!(result.is_err());
     }
 
@@ -858,15 +858,15 @@ mod tests {
     fn test_auto_detection_still_works() {
         // Without prefix, auto-detection should work as before
         assert!(matches!(
-            MmdbBuilder::detect_entry_type("1.2.3.4"),
+            DatabaseBuilder::detect_entry_type("1.2.3.4"),
             Ok(EntryType::IpAddress { .. })
         ));
         assert!(matches!(
-            MmdbBuilder::detect_entry_type("*.example.com"),
+            DatabaseBuilder::detect_entry_type("*.example.com"),
             Ok(EntryType::Glob(_))
         ));
         assert!(matches!(
-            MmdbBuilder::detect_entry_type("example.com"),
+            DatabaseBuilder::detect_entry_type("example.com"),
             Ok(EntryType::Literal(_))
         ));
     }
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn test_prefix_case_sensitive() {
         // Prefixes should be case-sensitive
-        let result = MmdbBuilder::detect_entry_type("LITERAL:test.com").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("LITERAL:test.com").unwrap();
         // Should not match prefix, should auto-detect as literal
         match result {
             EntryType::Literal(p) => {
@@ -887,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_literal_prefix_with_question_mark() {
-        let result = MmdbBuilder::detect_entry_type("literal:file?.txt").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("literal:file?.txt").unwrap();
         match result {
             EntryType::Literal(p) => assert_eq!(p, "file?.txt"),
             _ => panic!("Expected literal"),
@@ -896,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_literal_prefix_with_brackets() {
-        let result = MmdbBuilder::detect_entry_type("literal:file[1].txt").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("literal:file[1].txt").unwrap();
         match result {
             EntryType::Literal(p) => assert_eq!(p, "file[1].txt"),
             _ => panic!("Expected literal"),
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn test_builder_add_entry_with_prefix() {
         // Integration test: add_entry should respect prefixes
-        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
         // Force literal for a string that looks like a glob
         builder
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_builder_add_entry_glob_prefix() {
-        let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
 
         // Force glob for a string without wildcards
         builder.add_entry("glob:test.com", HashMap::new()).unwrap();
@@ -933,7 +933,7 @@ mod tests {
     #[test]
     fn test_empty_prefix_value() {
         // Edge case: what if someone uses "literal:" with nothing after?
-        let result = MmdbBuilder::detect_entry_type("literal:").unwrap();
+        let result = DatabaseBuilder::detect_entry_type("literal:").unwrap();
         match result {
             EntryType::Literal(p) => assert_eq!(p, ""),
             _ => panic!("Expected literal"),

@@ -2,7 +2,7 @@
 //!
 //! Shows how to set custom database_type and description fields
 
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
 use matchy::MatchMode;
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Building database with custom metadata...\n");
 
     // Create builder with custom metadata
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
         .with_database_type("MyCompany-ThreatIntel")
         .with_description("en", "Corporate threat intelligence database")
         .with_description(

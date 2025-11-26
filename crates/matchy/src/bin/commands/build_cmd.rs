@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use matchy::{mmdb_builder::MmdbBuilder, DataValue, MatchMode};
+use matchy::{mmdb_builder::DatabaseBuilder, DataValue, MatchMode};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead};
@@ -70,7 +70,7 @@ pub fn cmd_build(
         println!();
     }
 
-    let mut builder = MmdbBuilder::new(match_mode);
+    let mut builder = DatabaseBuilder::new(match_mode);
 
     // Apply metadata if provided
     if let Some(db_type) = database_type {

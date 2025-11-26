@@ -17,13 +17,13 @@ pub fn bench_pattern_database(
     cache_hit_rate: usize,
     pattern_style: &str,
 ) -> Result<()> {
-    use matchy::mmdb_builder::MmdbBuilder;
+    use matchy::mmdb_builder::DatabaseBuilder;
     use matchy::Database;
     use matchy::MatchMode;
 
     println!("--- Phase 1: Build Pattern Database ---");
     let build_start = Instant::now();
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
         .with_database_type("Benchmark-Pattern")
         .with_description("en", "Pattern database benchmark");
 

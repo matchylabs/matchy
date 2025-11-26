@@ -4,7 +4,7 @@
 //! containing IP addresses and patterns. This is the primary public API.
 
 use crate::database::{Database, QueryResult};
-use crate::mmdb_builder::MmdbBuilder;
+use crate::mmdb_builder::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ pub struct matchy_result_t {
 // ============================================================================
 
 struct MatchyBuilderInternal {
-    builder: MmdbBuilder,
+    builder: DatabaseBuilder,
 }
 
 struct MatchyInternal {
@@ -122,7 +122,7 @@ impl matchy_t {
 /// ```
 #[no_mangle]
 pub extern "C" fn matchy_builder_new() -> *mut matchy_builder_t {
-    let builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let internal = Box::new(MatchyBuilderInternal { builder });
     matchy_builder_t::from_internal(internal)
 }
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn matchy_builder_set_description(
     // Create new builder with description
     let old_builder = std::mem::replace(
         &mut internal.builder,
-        MmdbBuilder::new(MatchMode::CaseSensitive),
+        DatabaseBuilder::new(MatchMode::CaseSensitive),
     );
     internal.builder = old_builder.with_description("en", desc_str);
 
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn matchy_builder_save(
     // Replace builder with a dummy one to take ownership
     let builder_to_build = std::mem::replace(
         &mut internal.builder,
-        MmdbBuilder::new(MatchMode::CaseSensitive),
+        DatabaseBuilder::new(MatchMode::CaseSensitive),
     );
     let bytes = match builder_to_build.build() {
         Ok(b) => b,
@@ -323,7 +323,7 @@ pub unsafe extern "C" fn matchy_builder_build(
     // Replace builder with a dummy one to take ownership
     let builder_to_build = std::mem::replace(
         &mut internal.builder,
-        MmdbBuilder::new(MatchMode::CaseSensitive),
+        DatabaseBuilder::new(MatchMode::CaseSensitive),
     );
     let bytes = match builder_to_build.build() {
         Ok(b) => b,

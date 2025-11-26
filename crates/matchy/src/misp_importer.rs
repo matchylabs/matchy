@@ -51,7 +51,7 @@
 //! ```
 
 use crate::error::ParaglobError;
-use crate::mmdb_builder::MmdbBuilder;
+use crate::mmdb_builder::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -303,8 +303,8 @@ impl MispImporter {
         paths: &[P],
         match_mode: MatchMode,
         minimal_metadata: bool,
-    ) -> Result<MmdbBuilder, ParaglobError> {
-        let mut builder = MmdbBuilder::new(match_mode)
+    ) -> Result<DatabaseBuilder, ParaglobError> {
+        let mut builder = DatabaseBuilder::new(match_mode)
             .with_database_type("MISP-ThreatIntel")
             .with_description("en", "Threat intelligence database from MISP JSON feeds");
 
@@ -439,7 +439,7 @@ impl MispImporter {
     }
 
     /// Build a paraglob database from imported MISP data
-    pub fn build_database(&self, match_mode: MatchMode) -> Result<MmdbBuilder, ParaglobError> {
+    pub fn build_database(&self, match_mode: MatchMode) -> Result<DatabaseBuilder, ParaglobError> {
         self.build_database_with_options(match_mode, false)
     }
 
@@ -455,8 +455,8 @@ impl MispImporter {
         &self,
         match_mode: MatchMode,
         minimal_metadata: bool,
-    ) -> Result<MmdbBuilder, ParaglobError> {
-        let mut builder = MmdbBuilder::new(match_mode)
+    ) -> Result<DatabaseBuilder, ParaglobError> {
+        let mut builder = DatabaseBuilder::new(match_mode)
             .with_database_type("MISP-ThreatIntel")
             .with_description("en", "Threat intelligence database from MISP JSON feeds");
 
@@ -475,7 +475,7 @@ impl MispImporter {
     fn process_event_minimal(
         &self,
         event: &MispEvent,
-        builder: &mut MmdbBuilder,
+        builder: &mut DatabaseBuilder,
     ) -> Result<(), ParaglobError> {
         // Build minimal event metadata
         let mut event_metadata = HashMap::new();
@@ -574,7 +574,7 @@ impl MispImporter {
     fn process_event(
         &self,
         event: &MispEvent,
-        builder: &mut MmdbBuilder,
+        builder: &mut DatabaseBuilder,
     ) -> Result<(), ParaglobError> {
         // Build event-level metadata
         let event_metadata = self.build_event_metadata(event);
@@ -670,7 +670,7 @@ impl MispImporter {
         &self,
         attr: &MispAttribute,
         base_metadata: &HashMap<String, DataValue>,
-        builder: &mut MmdbBuilder,
+        builder: &mut DatabaseBuilder,
     ) -> Result<(), ParaglobError> {
         // Build metadata for this attribute
         let mut metadata = base_metadata.clone();
@@ -728,7 +728,7 @@ impl MispImporter {
         attr_type: &str,
         value: &str,
         metadata: HashMap<String, DataValue>,
-        builder: &mut MmdbBuilder,
+        builder: &mut DatabaseBuilder,
     ) -> Result<(), ParaglobError> {
         // Skip empty values (from null or missing data)
         if value.trim().is_empty() {

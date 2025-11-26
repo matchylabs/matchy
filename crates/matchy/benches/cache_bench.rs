@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::{mmdb_builder::MmdbBuilder, Database, MatchMode};
+use matchy::{mmdb_builder::DatabaseBuilder, Database, MatchMode};
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::Duration;
@@ -11,7 +11,7 @@ fn bench_cache_comparison(c: &mut Criterion) {
     group.sample_size(50);
 
     // Build a small test database with IPs, literals, and patterns
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     // Add 100 IPs
@@ -122,7 +122,7 @@ fn bench_cache_by_type(c: &mut Criterion) {
     group.sample_size(100);
 
     // Build database
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     for i in 0..100 {

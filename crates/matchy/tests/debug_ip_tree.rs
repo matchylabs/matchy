@@ -1,12 +1,12 @@
 use matchy::database::Database;
-use matchy::mmdb_builder::MmdbBuilder;
+use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::MatchMode;
 use std::collections::HashMap;
 
 #[test]
 fn debug_simple_sparse_ips() {
     // Insert just two IPs: 0.0.0.1 and 0.0.0.3
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let empty_data = HashMap::new();
 
     println!("\nInserting 0.0.0.1");

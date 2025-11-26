@@ -14,13 +14,13 @@ pub fn bench_combined_database(
     cache_size: usize,
     cache_hit_rate: usize,
 ) -> Result<()> {
-    use matchy::mmdb_builder::MmdbBuilder;
+    use matchy::mmdb_builder::DatabaseBuilder;
     use matchy::Database;
     use matchy::MatchMode;
 
     println!("--- Phase 1: Build Combined Database ---");
     let build_start = Instant::now();
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive)
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
         .with_database_type("Benchmark-Combined")
         .with_description("en", "Combined IP+Pattern benchmark");
 

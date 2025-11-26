@@ -1,12 +1,12 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::{mmdb_builder::MmdbBuilder, DataValue, Database, MatchMode};
+use matchy::{mmdb_builder::DatabaseBuilder, DataValue, Database, MatchMode};
 use std::collections::HashMap;
 use std::fs;
 use std::hint::black_box;
 use tempfile::TempDir;
 
 fn create_test_database(path: &std::path::Path) {
-    let mut builder = MmdbBuilder::new(MatchMode::CaseSensitive);
+    let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
     let mut data = HashMap::new();
     data.insert(
         "threat_level".to_string(),
