@@ -1095,11 +1095,12 @@ where
     // leading to unbounded queue growth (observed: 24GB+ memory with 160 workers).
     //
     // Queue sizes are capped to limit memory usage regardless of worker count:
-    // - Work queue max 64 items: ~256MB with 4MB chunks, ~2GB with 32MB chunks
-    // - File queue max 32 items: just PathBufs, negligible memory
+    // - Work queue max 32 items: ~128MB with 4MB chunks, ~1GB with 32MB chunks
+    // - File queue max 16 items: just PathBufs, negligible memory
     // There's no benefit to reading far ahead of workers - it just wastes memory.
-    const MAX_WORK_QUEUE_SIZE: usize = 64;
-    const MAX_FILE_QUEUE_SIZE: usize = 32;
+    // Workers drain the shared queue faster than readers can fill it anyway.
+    const MAX_WORK_QUEUE_SIZE: usize = 32;
+    const MAX_FILE_QUEUE_SIZE: usize = 16;
     let file_queue_size = (num_readers.max(1) * 2).min(MAX_FILE_QUEUE_SIZE);
     let work_queue_size = (num_workers * MAX_QUEUE_PER_WORKER).min(MAX_WORK_QUEUE_SIZE);
     let (file_sender, file_receiver) = bounded::<PathBuf>(file_queue_size);
