@@ -42,7 +42,7 @@
 
 use crate::extractor::{ExtractedItem, Extractor, HashType};
 use crate::{Database, QueryResult};
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{bounded, Sender};
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
@@ -1089,8 +1089,14 @@ where
     // 1. file_queue: Files that need chunking (readers pull from here)
     // 2. work_queue: Work units ready to process (workers pull from here)
     // Using crossbeam-channel for lock-free MPMC (receivers are clonable)
-    let (file_sender, file_receiver) = unbounded::<PathBuf>();
-    let (work_sender, work_receiver) = unbounded::<WorkUnit>();
+    //
+    // IMPORTANT: Use bounded channels to apply backpressure and prevent memory explosion.
+    // Without bounds, readers can produce chunks faster than workers consume them,
+    // leading to unbounded queue growth (observed: 24GB+ memory with 160 workers).
+    let file_queue_size = num_readers.max(1) * 2; // 2 files queued per reader
+    let work_queue_size = num_workers * MAX_QUEUE_PER_WORKER; // Match routing capacity check
+    let (file_sender, file_receiver) = bounded::<PathBuf>(file_queue_size);
+    let (work_sender, work_receiver) = bounded::<WorkUnit>(work_queue_size);
 
     // Wrap factory and progress callback in Arc for sharing across threads
     let worker_factory = Arc::new(create_worker);
