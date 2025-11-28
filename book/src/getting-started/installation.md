@@ -58,7 +58,7 @@ cargo build
 Clone and build the repository:
 
 ```bash
-git clone https://github.com/sethhall/matchy
+git clone https://github.com/matchylabs/matchy
 cd matchy
 cargo build --release
 ```

@@ -7,7 +7,7 @@ Get up and running with Matchy in minutes.
 ### From Source
 
 ```bash
-git clone https://github.com/sethhall/matchy
+git clone https://github.com/matchylabs/matchy
 cd matchy
 cargo build --release
 ```

@@ -19,7 +19,7 @@ Before your first release, you must configure trusted publishing on crates.io:
 1. Go to https://crates.io/crates/matchy/settings
 2. Navigate to the "Trusted Publishing" section
 3. Click "Add" and fill in:
-   - **Repository owner:** `sethhall`
+   - **Repository owner:** `matchylabs`
    - **Repository name:** `matchy`
    - **Workflow filename:** `release.yml`
    - **Environment:** `release`
@@ -106,14 +106,14 @@ Monitor the release progress:
 gh run watch
 ```
 
-Or visit: https://github.com/sethhall/matchy/actions
+Or visit: https://github.com/matchylabs/matchy/actions
 
 ### Verify Publication
 
 After the workflow completes:
 
 1. **Check crates.io:** https://crates.io/crates/matchy
-2. **Check GitHub release:** https://github.com/sethhall/matchy/releases
+2. **Check GitHub release:** https://github.com/matchylabs/matchy/releases
 3. **Test installation:**
    ```bash
    cargo install matchy --force
@@ -217,7 +217,7 @@ Yanked versions remain available for existing users but won't be installed for n
 Under the hood:
 
 1. GitHub Actions generates an **OIDC token** that cryptographically proves:
-   - The workflow is running from the `sethhall/matchy` repository
+   - The workflow is running from the `matchylabs/matchy` repository
    - It's using the `release.yml` workflow
    - It's deploying to the `release` environment
 
@@ -238,5 +238,5 @@ This is more secure than API tokens because:
 - [Testing](testing.md) - Run tests before releasing
 - [CI Checks](ci-checks.md) - What CI validates
 - [Benchmarking](benchmarking.md) - Performance validation
-- [GitHub Actions Workflows](https://github.com/sethhall/matchy/tree/main/.github/workflows)
+- [GitHub Actions Workflows](https://github.com/matchylabs/matchy/tree/main/.github/workflows)
 - [crates.io Trusted Publishing Docs](https://crates.io/docs/trusted-publishing)

@@ -11,7 +11,7 @@ Build Matchy from source code.
 
 ```bash
 # Clone
-git clone https://github.com/sethhall/matchy.git
+git clone https://github.com/matchylabs/matchy.git
 cd matchy
 
 # Build

@@ -8,7 +8,7 @@
 
 # Matchy
 
-[![CI](https://github.com/sethhall/matchy/actions/workflows/ci.yml/badge.svg)](https://github.com/sethhall/matchy/actions/workflows/ci.yml)
+[![CI](https://github.com/matchylabs/matchy/actions/workflows/ci.yml/badge.svg)](https://github.com/matchylabs/matchy/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/matchy.svg)](https://crates.io/crates/matchy)
 [![Documentation](https://docs.rs/matchy/badge.svg)](https://docs.rs/matchy)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
@@ -64,7 +64,7 @@ matchy query threats.mxy 1.2.3.4
 cargo install matchy
 ```
 
-**Requirements**: Rust 1.70+ (or use [pre-built binaries](https://github.com/sethhall/matchy/releases))
+**Requirements**: Rust 1.70+ (or use [pre-built binaries](https://github.com/matchylabs/matchy/releases))
 
 ### Build a Threat Database
 
@@ -151,11 +151,11 @@ matchy_result_t result = matchy_query(db, "1.2.3.4");
 matchy_close(db);
 ```
 
-MaxMind-compatible API also available. See **[The Matchy Book](https://sethhall.github.io/matchy/)** for integration guides.
+MaxMind-compatible API also available. See **[The Matchy Book](https://matchylabs.github.io/matchy/)** for integration guides.
 
 ## Documentation
 
-- **[The Matchy Book](https://sethhall.github.io/matchy/)** - Complete CLI guide and examples
+- **[The Matchy Book](https://matchylabs.github.io/matchy/)** - Complete CLI guide and examples
 - **[API Reference](https://docs.rs/matchy)** - Rust library documentation  
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture and performance details
 

@@ -244,7 +244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.1] - 2025-10-14
 
 ### Fixed
-- **Critical: IP Longest Prefix Match Bug** ([#10](https://github.com/sethhall/matchy/issues/10))
+- **Critical: IP Longest Prefix Match Bug** ([#10](https://github.com/matchylabs/matchy/issues/10))
   - Fixed insertion order dependency where more specific IP prefixes inserted before less specific ones could be incorrectly overridden
   - Added prefix length tracking to `NodePointer::Data` for proper route specificity comparison
   - Affects both IPv4 and IPv6 address lookups

@@ -12,8 +12,8 @@ create-missing = false
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/sethhall/matchy"
-edit-url-template = "https://github.com/sethhall/matchy/edit/main/book/{path}"
+git-repository-url = "https://github.com/matchylabs/matchy"
+edit-url-template = "https://github.com/matchylabs/matchy/edit/main/book/{path}"
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
 additional-css = ["custom.css"]
 no-section-label = true

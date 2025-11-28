@@ -18,7 +18,7 @@ Be respectful and constructive. We're all here to make matchy better.
 
 ```bash
 # Clone the repository
-git clone https://github.com/sethhall/matchy.git
+git clone https://github.com/matchylabs/matchy.git
 cd matchy
 
 # Build the project

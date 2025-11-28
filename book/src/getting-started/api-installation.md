@@ -42,7 +42,7 @@ Install the system-wide C library:
 
 ```console
 $ cargo install cargo-c
-$ git clone https://github.com/sethhall/matchy
+$ git clone https://github.com/matchylabs/matchy
 $ cd matchy
 $ cargo cinstall --release --prefix=/usr/local
 ```
@@ -63,7 +63,7 @@ $ gcc myapp.c $(pkg-config --cflags --libs matchy) -o myapp
 1. Build the library:
 
 ```console
-$ git clone https://github.com/sethhall/matchy
+$ git clone https://github.com/matchylabs/matchy
 $ cd matchy
 $ cargo build --release
 ```

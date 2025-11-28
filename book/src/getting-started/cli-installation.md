@@ -40,7 +40,7 @@ matchy {{version}}
 To install the latest development version:
 
 ```console
-$ git clone https://github.com/sethhall/matchy
+$ git clone https://github.com/matchylabs/matchy
 $ cd matchy
 $ cargo install --path .
 ```
@@ -50,7 +50,7 @@ $ cargo install --path .
 You can also run Matchy directly from the source repository without installing:
 
 ```console
-$ git clone https://github.com/sethhall/matchy
+$ git clone https://github.com/matchylabs/matchy
 $ cd matchy
 $ cargo run --release -- --version
 matchy {{version}}

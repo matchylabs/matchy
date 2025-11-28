@@ -106,5 +106,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See the [repository examples directory](https://github.com/sethhall/matchy/tree/main/examples)
+See the [repository examples directory](https://github.com/matchylabs/matchy/tree/main/examples)
 for more complete examples.
