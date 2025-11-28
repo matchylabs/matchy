@@ -93,7 +93,7 @@ matchy-extractor = { path = "../matchy-extractor" }
 thiserror = "2.0"  # Error handling with automatic conversions
 libc = "0.2"
 memmap2 = "0.9.9"
-zerocopy = { version = "0.8.27", features = ["derive"] }  # Safe binary format access
+zerocopy = { version = "0.8.30", features = ["derive"] }  # Safe binary format access
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
