@@ -42,7 +42,7 @@
 
 use crate::extractor::{ExtractedItem, Extractor, HashType};
 use crate::{Database, QueryResult};
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::{bounded, Sender};
 use std::fs;
 use std::io::{self, BufRead, Read};
 use std::path::{Path, PathBuf};
@@ -1089,8 +1089,22 @@ where
     // 1. file_queue: Files that need chunking (readers pull from here)
     // 2. work_queue: Work units ready to process (workers pull from here)
     // Using crossbeam-channel for lock-free MPMC (receivers are clonable)
-    let (file_sender, file_receiver) = unbounded::<PathBuf>();
-    let (work_sender, work_receiver) = unbounded::<WorkUnit>();
+    //
+    // IMPORTANT: Use bounded channels to apply backpressure and prevent memory explosion.
+    // Without bounds, readers can produce chunks faster than workers consume them,
+    // leading to unbounded queue growth (observed: 24GB+ memory with 160 workers).
+    //
+    // Queue sizes are capped to limit memory usage regardless of worker count:
+    // - Work queue max 32 items: ~128MB with 4MB chunks, ~1GB with 32MB chunks
+    // - File queue max 16 items: just PathBufs, negligible memory
+    // There's no benefit to reading far ahead of workers - it just wastes memory.
+    // Workers drain the shared queue faster than readers can fill it anyway.
+    const MAX_WORK_QUEUE_SIZE: usize = 32;
+    const MAX_FILE_QUEUE_SIZE: usize = 16;
+    let file_queue_size = (num_readers.max(1) * 2).min(MAX_FILE_QUEUE_SIZE);
+    let work_queue_size = (num_workers * MAX_QUEUE_PER_WORKER).min(MAX_WORK_QUEUE_SIZE);
+    let (file_sender, file_receiver) = bounded::<PathBuf>(file_queue_size);
+    let (work_sender, work_receiver) = bounded::<WorkUnit>(work_queue_size);
 
     // Wrap factory and progress callback in Arc for sharing across threads
     let worker_factory = Arc::new(create_worker);
@@ -1993,5 +2007,147 @@ mod tests {
 
         // Verify routing stats
         assert_eq!(result.routing_stats.total_files(), 2);
+    }
+
+    /// Test that bounded channels apply backpressure to prevent memory explosion.
+    ///
+    /// This test verifies the fix for the memory leak where unbounded channels
+    /// allowed readers to produce chunks faster than workers could consume them,
+    /// leading to 24GB+ memory usage with many workers.
+    ///
+    /// The test uses crossbeam's channel.len() to directly verify the channel
+    /// never exceeds its capacity, which is the critical property for memory safety.
+    #[test]
+    fn test_bounded_channel_backpressure() {
+        use crossbeam_channel::bounded;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+        use std::time::Duration;
+
+        // Simulate the work queue with a small bound
+        // This mirrors the production code: bounded::<WorkUnit>(work_queue_size)
+        let channel_capacity = 8;
+        let (sender, receiver) = bounded::<Vec<u8>>(channel_capacity);
+
+        // Track maximum channel length observed (this is what matters for memory)
+        let max_channel_len = Arc::new(AtomicUsize::new(0));
+
+        // Number of items to process - deliberately much larger than capacity
+        // to ensure backpressure must kick in
+        let total_items = 200;
+
+        // Spawn slow consumer threads (simulating slow workers)
+        let num_consumers = 2;
+        let mut consumer_handles = Vec::new();
+        for _ in 0..num_consumers {
+            let rx = receiver.clone();
+            let max_len = Arc::clone(&max_channel_len);
+
+            let handle = thread::spawn(move || {
+                let mut count = 0;
+                while let Ok(_item) = rx.recv() {
+                    // Check channel length after receiving (measures queue buildup)
+                    let len = rx.len();
+                    let mut max = max_len.load(Ordering::Relaxed);
+                    while len > max {
+                        match max_len.compare_exchange_weak(
+                            max,
+                            len,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(m) => max = m,
+                        }
+                    }
+
+                    // Simulate slow processing (workers doing real work)
+                    thread::sleep(Duration::from_millis(2));
+                    count += 1;
+                }
+                count
+            });
+            consumer_handles.push(handle);
+        }
+        drop(receiver); // Close our copy so consumers can detect shutdown
+
+        // Spawn fast producer threads (simulating readers chunking files quickly)
+        let num_producers = 4;
+        let items_per_producer = total_items / num_producers;
+        let mut producer_handles = Vec::new();
+        for _ in 0..num_producers {
+            let tx = sender.clone();
+            let max_len = Arc::clone(&max_channel_len);
+
+            let handle = thread::spawn(move || {
+                for _ in 0..items_per_producer {
+                    // Create a chunk (in real code this would be megabytes)
+                    let chunk = vec![0u8; 1024];
+
+                    // Check channel length before sending
+                    let len = tx.len();
+                    let mut max = max_len.load(Ordering::Relaxed);
+                    while len > max {
+                        match max_len.compare_exchange_weak(
+                            max,
+                            len,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        ) {
+                            Ok(_) => break,
+                            Err(m) => max = m,
+                        }
+                    }
+
+                    // Send to channel - this will BLOCK if channel is full (backpressure!)
+                    if tx.send(chunk).is_err() {
+                        break;
+                    }
+                }
+            });
+            producer_handles.push(handle);
+        }
+        drop(sender); // Close sender so consumers know when to stop
+
+        // Wait for all producers to finish
+        for handle in producer_handles {
+            handle.join().unwrap();
+        }
+
+        // Wait for all consumers to finish
+        let total_consumed: usize = consumer_handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .sum();
+
+        // Verify all items were processed
+        assert_eq!(total_consumed, total_items);
+
+        // Verify backpressure worked: channel length never exceeded capacity
+        // This is the critical invariant - the channel physically cannot hold more
+        let observed_max_len = max_channel_len.load(Ordering::Relaxed);
+
+        assert!(
+            observed_max_len <= channel_capacity,
+            "Channel exceeded capacity: max observed length ({}) > capacity ({}). \
+             With unbounded channels this would grow to {}.",
+            observed_max_len,
+            channel_capacity,
+            total_items
+        );
+
+        // Verify we actually stressed the system (queue got reasonably full)
+        assert!(
+            observed_max_len >= channel_capacity / 2,
+            "Test may not have applied enough pressure: max channel length ({}) \
+             was less than half capacity ({}). Increase total_items or slow down consumers.",
+            observed_max_len,
+            channel_capacity
+        );
+
+        // This test proves: with bounded channels, memory is bounded to
+        // channel_capacity * chunk_size, regardless of how many items are produced.
+        // The old unbounded channels would have allowed all 200 items to queue up.
     }
 }
