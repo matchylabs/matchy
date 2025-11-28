@@ -11,7 +11,7 @@
 [![CI](https://github.com/matchylabs/matchy/actions/workflows/ci.yml/badge.svg)](https://github.com/matchylabs/matchy/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/matchy.svg)](https://crates.io/crates/matchy)
 [![Documentation](https://docs.rs/matchy/badge.svg)](https://docs.rs/matchy)
-[![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **Fast IoC matching against logs, network traffic, and security data.**
 
@@ -178,7 +178,7 @@ Each crate has its own README with usage examples and architecture details.
 
 ## Project Info
 
-**License**: BSD-2-Clause  
+**License**: Apache-2.0
 **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)  
 **Status**: Production-ready, 242 tests passing
 

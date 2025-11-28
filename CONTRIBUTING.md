@@ -188,7 +188,7 @@ matchy/
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the BSD-2-Clause License.
+By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
 
 ## Recognition
 

@@ -16,7 +16,7 @@ resolver = "2"
 version = "1.2.2"
 authors = ["Seth Hall <seth@remor.com>"]
 edition = "2021"
-license = "BSD-2-Clause"
+license = "Apache-2.0"
 repository = "https://github.com/matchylabs/matchy"
 
 [workspace.dependencies]
