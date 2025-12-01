@@ -102,7 +102,7 @@ xxhash-rust = { version = "0.8", features = ["xxh64"] }  # Stable XXH64 for on-d
 lru = "0.16"  # LRU cache for query results
 memchr = "2.7"  # SIMD-accelerated byte searching
 rayon = "1.10"  # Parallel sort for large hash builds
-flate2 = { version = "1.1", features = ["zlib-rs"], default-features = false }  # Gzip with fastest zlib-rs backend
+flate2 = { version = "1.1", features = ["rust_backend"], default-features = false }  # Gzip with pure Rust miniz_oxide backend
 bs58 = "0.5"  # Base58 encoding/decoding for Bitcoin/Monero addresses
 sha2 = "0.10"  # SHA256 for Bitcoin checksum validation
 tiny-keccak = { version = "2.0", features = ["keccak"] }  # Keccak256 for Ethereum checksum validation
