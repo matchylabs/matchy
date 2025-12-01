@@ -19,7 +19,7 @@ rustc-hash = "2.0"  # For literal hash table
 serde = { version = "1.0", features = ["derive"] }  # For DataValue
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 tempfile = "3.8"
 
 [[bench]]
