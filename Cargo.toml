@@ -9,6 +9,7 @@ members = [
     "crates/matchy-literal-hash",
     "crates/matchy-format",
     "crates/matchy-extractor",
+    "crates/matchy-wasm",
 ]
 resolver = "2"
 

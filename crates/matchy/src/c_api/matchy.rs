@@ -75,7 +75,8 @@ struct MatchyBuilderInternal {
 /// Internal database variant - either static or watching
 enum MatchyDatabaseVariant {
     /// Static database (no auto-reload)
-    Static(Database),
+    /// Boxed to reduce enum size disparity (clippy::large_enum_variant)
+    Static(Box<Database>),
     /// Watching database with auto-reload (not available on WASM)
     #[cfg(not(target_family = "wasm"))]
     Watching(WatchingDatabase),
@@ -84,7 +85,7 @@ enum MatchyDatabaseVariant {
 impl MatchyDatabaseVariant {
     fn lookup(&self, query: &str) -> Result<Option<QueryResult>, DatabaseError> {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.lookup(query),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().lookup(query),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.lookup(query),
         }
@@ -92,7 +93,7 @@ impl MatchyDatabaseVariant {
 
     fn stats(&self) -> DatabaseStatsSnapshot {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.stats(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().stats(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().stats(),
         }
@@ -100,7 +101,7 @@ impl MatchyDatabaseVariant {
 
     fn clear_cache(&self) {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.clear_cache(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().clear_cache(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().clear_cache(),
         }
@@ -110,7 +111,7 @@ impl MatchyDatabaseVariant {
         match self {
             MatchyDatabaseVariant::Static(db) => {
                 // Map to static str (db.format() returns one of these static strings)
-                match db.format() {
+                match db.as_ref().format() {
                     "IP database" => "IP database",
                     "Pattern database" => "Pattern database",
                     "Combined IP+Pattern database" => "Combined IP+Pattern database",
@@ -133,7 +134,7 @@ impl MatchyDatabaseVariant {
 
     fn has_ip_data(&self) -> bool {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.has_ip_data(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().has_ip_data(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().has_ip_data(),
         }
@@ -141,7 +142,7 @@ impl MatchyDatabaseVariant {
 
     fn has_string_data(&self) -> bool {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.has_string_data(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().has_string_data(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().has_string_data(),
         }
@@ -149,7 +150,7 @@ impl MatchyDatabaseVariant {
 
     fn has_literal_data(&self) -> bool {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.has_literal_data(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().has_literal_data(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().has_literal_data(),
         }
@@ -157,7 +158,7 @@ impl MatchyDatabaseVariant {
 
     fn has_glob_data(&self) -> bool {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.has_glob_data(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().has_glob_data(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().has_glob_data(),
         }
@@ -165,7 +166,7 @@ impl MatchyDatabaseVariant {
 
     fn metadata(&self) -> Option<DataValue> {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.metadata(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().metadata(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().metadata(),
         }
@@ -173,7 +174,7 @@ impl MatchyDatabaseVariant {
 
     fn get_pattern_string(&self, pattern_id: u32) -> Option<String> {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.get_pattern_string(pattern_id),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().get_pattern_string(pattern_id),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().get_pattern_string(pattern_id),
         }
@@ -181,7 +182,7 @@ impl MatchyDatabaseVariant {
 
     fn pattern_count(&self) -> usize {
         match self {
-            MatchyDatabaseVariant::Static(db) => db.pattern_count(),
+            MatchyDatabaseVariant::Static(db) => db.as_ref().pattern_count(),
             #[cfg(not(target_family = "wasm"))]
             MatchyDatabaseVariant::Watching(db) => db.snapshot().pattern_count(),
         }
@@ -676,7 +677,7 @@ pub unsafe extern "C" fn matchy_open_with_options(
     match opener.open() {
         Ok(db) => {
             let internal = Box::new(MatchyInternal {
-                database: MatchyDatabaseVariant::Static(db),
+                database: MatchyDatabaseVariant::Static(Box::new(db)),
             });
             matchy_t::from_internal(internal)
         }
@@ -684,12 +685,9 @@ pub unsafe extern "C" fn matchy_open_with_options(
     }
 }
 
-/// Helper to open a WatchingDatabase with C callback support
+/// Helper to open a WatchingDatabase
 #[cfg(not(target_family = "wasm"))]
-unsafe fn open_watching_database(
-    path: &str,
-    opts: &matchy_open_options_t,
-) -> *mut matchy_t {
+unsafe fn open_watching_database(path: &str, opts: &matchy_open_options_t) -> *mut matchy_t {
     let mut opener = WatchingDatabase::from(path);
 
     if opts.cache_capacity == 0 {
@@ -798,7 +796,7 @@ pub unsafe extern "C" fn matchy_open_buffer(buffer: *const u8, size: usize) -> *
     match Database::from_bytes(slice.to_vec()) {
         Ok(db) => {
             let internal = Box::new(MatchyInternal {
-                database: MatchyDatabaseVariant::Static(db),
+                database: MatchyDatabaseVariant::Static(Box::new(db)),
             });
             matchy_t::from_internal(internal)
         }

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::{mmdb_builder::DatabaseBuilder, DataValue, Database, MatchMode};
+use matchy::{mmdb_builder::DatabaseBuilder, DataValue, Database, MatchMode, WatchingDatabase};
 use std::collections::HashMap;
 use std::fs;
 use std::hint::black_box;
@@ -42,10 +42,7 @@ fn bench_reload_overhead(c: &mut Criterion) {
     });
 
     // Benchmark WITH auto-reload (lock-free Arc access)
-    let db_with_reload = Database::from(db_path.clone())
-        .auto_reload()
-        .open()
-        .unwrap();
+    let db_with_reload = WatchingDatabase::from(db_path.clone()).open().unwrap();
 
     group.bench_function(BenchmarkId::from_parameter("with_auto_reload"), |b| {
         b.iter(|| {
@@ -67,12 +64,7 @@ fn bench_concurrent_access(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_access");
 
     // Test with 4 threads hammering queries
-    let db = Arc::new(
-        Database::from(db_path.clone())
-            .auto_reload()
-            .open()
-            .unwrap(),
-    );
+    let db = Arc::new(WatchingDatabase::from(db_path.clone()).open().unwrap());
 
     group.bench_function("4_threads_auto_reload", |b| {
         b.iter(|| {
