@@ -1,4 +1,4 @@
-use matchy::{DataValue, Database, DatabaseBuilder, MatchMode};
+use matchy::{DataValue, Database, DatabaseBuilder, MatchMode, WatchingDatabase};
 use std::collections::HashMap;
 use std::fs;
 use std::thread;
@@ -24,8 +24,8 @@ fn test_auto_reload_basic() {
     let db_bytes = builder.build().unwrap();
     fs::write(&db_path, &db_bytes).unwrap();
 
-    // Open with auto-reload enabled
-    let db = Database::from(&db_path).auto_reload().open().unwrap();
+    // Open with WatchingDatabase for auto-reload
+    let db = WatchingDatabase::from(&db_path).open().unwrap();
 
     // Give watcher thread time to fully initialize and start watching
     thread::sleep(Duration::from_millis(500));
@@ -46,8 +46,17 @@ fn test_auto_reload_basic() {
     fs::write(&temp_new_path, &db_bytes2).unwrap();
     fs::rename(&temp_new_path, &db_path).unwrap();
 
-    // Wait for debounce + reload (give plenty of time for events + debounce + reload)
-    thread::sleep(Duration::from_millis(1000));
+    // Wait for reload with retry (file watching can be timing-sensitive)
+    let initial_generation = db.generation();
+    let mut reloaded = false;
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(100));
+        if db.generation() > initial_generation {
+            reloaded = true;
+            break;
+        }
+    }
+    assert!(reloaded, "Database should have reloaded (generation should have increased)");
 
     // Query should now find updated value
     let result = db.lookup("1.2.3.4").unwrap();

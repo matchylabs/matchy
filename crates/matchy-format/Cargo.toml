@@ -17,14 +17,11 @@ matchy-match-mode = { path = "../matchy-match-mode" }
 
 # External dependencies
 zerocopy.workspace = true
-memmap2 = "0.9.9"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rustc-hash = "2.0"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
-rayon = "1.10"  # Parallel sort for hash builds
-libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"

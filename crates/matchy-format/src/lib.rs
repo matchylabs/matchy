@@ -9,7 +9,6 @@
 
 // Public modules
 pub mod error;
-pub mod mmap;
 pub mod mmdb;
 pub mod mmdb_builder;
 pub mod offset_format;

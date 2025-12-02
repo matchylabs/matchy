@@ -3,7 +3,7 @@
 //! This module provides a modern, clean C API for building and querying databases
 //! containing IP addresses and patterns. This is the primary public API.
 
-use crate::database::{Database, QueryResult};
+use crate::database::{Database, DatabaseError, DatabaseStatsSnapshot, QueryResult};
 use crate::mmdb_builder::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
@@ -12,6 +12,9 @@ use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
+
+#[cfg(not(target_family = "wasm"))]
+use crate::watching_database::{ReloadEvent, WatchingDatabase};
 
 // ============================================================================
 // ERROR CODES
@@ -69,8 +72,124 @@ struct MatchyBuilderInternal {
     builder: DatabaseBuilder,
 }
 
+/// Internal database variant - either static or watching
+enum MatchyDatabaseVariant {
+    /// Static database (no auto-reload)
+    Static(Database),
+    /// Watching database with auto-reload (not available on WASM)
+    #[cfg(not(target_family = "wasm"))]
+    Watching(WatchingDatabase),
+}
+
+impl MatchyDatabaseVariant {
+    fn lookup(&self, query: &str) -> Result<Option<QueryResult>, DatabaseError> {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.lookup(query),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.lookup(query),
+        }
+    }
+
+    fn stats(&self) -> DatabaseStatsSnapshot {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.stats(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().stats(),
+        }
+    }
+
+    fn clear_cache(&self) {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.clear_cache(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().clear_cache(),
+        }
+    }
+
+    fn format(&self) -> &'static str {
+        match self {
+            MatchyDatabaseVariant::Static(db) => {
+                // Map to static str (db.format() returns one of these static strings)
+                match db.format() {
+                    "IP database" => "IP database",
+                    "Pattern database" => "Pattern database",
+                    "Combined IP+Pattern database" => "Combined IP+Pattern database",
+                    _ => "Unknown format",
+                }
+            }
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => {
+                let snapshot = db.snapshot();
+                // Map to static str (format() returns one of these strings)
+                match snapshot.format() {
+                    "IP database" => "IP database",
+                    "Pattern database" => "Pattern database",
+                    "Combined IP+Pattern database" => "Combined IP+Pattern database",
+                    _ => "Unknown format",
+                }
+            }
+        }
+    }
+
+    fn has_ip_data(&self) -> bool {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.has_ip_data(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().has_ip_data(),
+        }
+    }
+
+    fn has_string_data(&self) -> bool {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.has_string_data(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().has_string_data(),
+        }
+    }
+
+    fn has_literal_data(&self) -> bool {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.has_literal_data(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().has_literal_data(),
+        }
+    }
+
+    fn has_glob_data(&self) -> bool {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.has_glob_data(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().has_glob_data(),
+        }
+    }
+
+    fn metadata(&self) -> Option<DataValue> {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.metadata(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().metadata(),
+        }
+    }
+
+    fn get_pattern_string(&self, pattern_id: u32) -> Option<String> {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.get_pattern_string(pattern_id),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().get_pattern_string(pattern_id),
+        }
+    }
+
+    fn pattern_count(&self) -> usize {
+        match self {
+            MatchyDatabaseVariant::Static(db) => db.pattern_count(),
+            #[cfg(not(target_family = "wasm"))]
+            MatchyDatabaseVariant::Watching(db) => db.snapshot().pattern_count(),
+        }
+    }
+}
+
 struct MatchyInternal {
-    database: Database,
+    database: MatchyDatabaseVariant,
 }
 
 // Conversion helpers for opaque types
@@ -539,7 +658,13 @@ pub unsafe extern "C" fn matchy_open_with_options(
 
     let opts = &*options;
 
-    // Build database using fluent API
+    // Use WatchingDatabase if auto_reload is enabled (native platforms only)
+    #[cfg(not(target_family = "wasm"))]
+    if opts.auto_reload {
+        return open_watching_database(path, opts);
+    }
+
+    // Fall back to static Database (or always on WASM)
     let mut opener = Database::from(path);
 
     if opts.cache_capacity == 0 {
@@ -548,16 +673,37 @@ pub unsafe extern "C" fn matchy_open_with_options(
         opener = opener.cache_capacity(opts.cache_capacity as usize);
     }
 
-    if opts.auto_reload {
-        opener = opener.auto_reload();
+    match opener.open() {
+        Ok(db) => {
+            let internal = Box::new(MatchyInternal {
+                database: MatchyDatabaseVariant::Static(db),
+            });
+            matchy_t::from_internal(internal)
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Helper to open a WatchingDatabase with C callback support
+#[cfg(not(target_family = "wasm"))]
+unsafe fn open_watching_database(
+    path: &str,
+    opts: &matchy_open_options_t,
+) -> *mut matchy_t {
+    let mut opener = WatchingDatabase::from(path);
+
+    if opts.cache_capacity == 0 {
+        opener = opener.no_cache();
+    } else {
+        opener = opener.cache_capacity(opts.cache_capacity as usize);
     }
 
-    // Set up reload callback if provided (check for non-null function pointer)
+    // Set up reload callback if provided
     if let Some(callback_fn) = opts.reload_callback {
         // Safety: We trust that the C callback is thread-safe (documented requirement)
         // Cast pointer to usize for Send+Sync (usize is Copy and thread-safe)
         let user_data = opts.reload_callback_user_data as usize;
-        opener = opener.on_reload(move |event: crate::database::ReloadEvent| {
+        opener = opener.on_reload(move |event: ReloadEvent| {
             // Convert Rust ReloadEvent to C matchy_reload_event_t
             let c_path = std::ffi::CString::new(event.path.to_string_lossy().as_ref())
                 .unwrap_or_else(|_| std::ffi::CString::new("<invalid path>").unwrap());
@@ -586,7 +732,9 @@ pub unsafe extern "C" fn matchy_open_with_options(
 
     match opener.open() {
         Ok(db) => {
-            let internal = Box::new(MatchyInternal { database: db });
+            let internal = Box::new(MatchyInternal {
+                database: MatchyDatabaseVariant::Watching(db),
+            });
             matchy_t::from_internal(internal)
         }
         Err(_) => ptr::null_mut(),
@@ -649,7 +797,9 @@ pub unsafe extern "C" fn matchy_open_buffer(buffer: *const u8, size: usize) -> *
     let slice = slice::from_raw_parts(buffer, size);
     match Database::from_bytes(slice.to_vec()) {
         Ok(db) => {
-            let internal = Box::new(MatchyInternal { database: db });
+            let internal = Box::new(MatchyInternal {
+                database: MatchyDatabaseVariant::Static(db),
+            });
             matchy_t::from_internal(internal)
         }
         Err(_) => ptr::null_mut(),
