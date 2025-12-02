@@ -1,0 +1,96 @@
+name: WASM Build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'crates/matchy-wasm/**'
+      - 'crates/matchy/**'
+      - 'crates/matchy-*/**'
+      - '.github/workflows/wasm.yml'
+  pull_request:
+    paths:
+      - 'crates/matchy-wasm/**'
+      - 'crates/matchy/**'
+      - 'crates/matchy-*/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Build WASM (debug check)
+        run: cargo build -p matchy-wasm --target wasm32-unknown-unknown
+
+      - name: Build WASM package (web target)
+        run: wasm-pack build crates/matchy-wasm --target web --out-dir demo/pkg
+
+      - name: Upload demo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchy-wasm-demo
+          path: crates/matchy-wasm/demo/
+          retention-days: 7
+
+  # Build npm package (for future npm publishing)
+  build-npm:
+    name: Build npm Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build npm package (bundler target)
+        run: wasm-pack build crates/matchy-wasm --target bundler --out-dir pkg-npm
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchy-wasm-npm
+          path: crates/matchy-wasm/pkg-npm/
+          retention-days: 7

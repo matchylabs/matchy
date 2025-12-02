@@ -22,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rustc-hash = "2.0"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
+web-time = "1.1"
 
 [dev-dependencies]
 tempfile = "3.8"

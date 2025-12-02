@@ -1,0 +1,42 @@
+[package]
+name = "matchy-wasm"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebAssembly bindings for matchy - fast IP and pattern matching database"
+readme = "README.md"
+keywords = ["wasm", "ip", "pattern-matching", "threat-intelligence", "webassembly"]
+categories = ["wasm", "network-programming", "database"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Core matchy library (lib only, no CLI features)
+matchy = { path = "../matchy", default-features = false }
+
+# WASM bindings
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+# Serialization for JS interop
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-wasm-bindgen = "0.6"
+
+# Better panic messages in WASM
+console_error_panic_hook = "0.1"
+
+# Base64 encoding for bytes
+base64 = "0.22"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--enable-simd"]
+
+[package.metadata.wasm-pack.profile.dev]
+wasm-opt = false

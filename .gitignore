@@ -46,3 +46,7 @@ perf.data
 # mdbook build output
 /book/book/
 /book/html/
+
+# wasm-pack build outputs
+pkg/
+*/pkg/

@@ -139,7 +139,8 @@ pub mod validation;
 #[cfg(not(target_family = "wasm"))]
 pub mod watching_database;
 
-// Public C API
+// Public C API (native platforms only - FFI not available on WASM)
+#[cfg(not(target_family = "wasm"))]
 pub mod c_api;
 
 // Bench-only internal API surface (kept out of public builds)
