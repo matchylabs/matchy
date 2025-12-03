@@ -62,6 +62,7 @@
             display: flex;
             gap: 0.5rem;
             margin-bottom: 1.5rem;
+            flex-wrap: wrap;
         }
         
         .tab {
@@ -136,7 +137,7 @@
             font-family: inherit;
         }
         
-        input:focus, textarea:focus {
+        input:focus, textarea:focus, select:focus {
             outline: none;
             border-color: var(--accent);
         }
@@ -169,6 +170,11 @@
         
         .btn-secondary {
             background: var(--primary);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: #000;
         }
         
         .btn-small {
@@ -299,6 +305,7 @@
             display: flex;
             gap: 0.5rem;
             align-items: flex-end;
+            flex-wrap: wrap;
         }
         
         .flex-grow {
@@ -309,6 +316,84 @@
         .mb-2 { margin-bottom: 1rem; }
         .mt-1 { margin-top: 0.5rem; }
         .mt-2 { margin-top: 1rem; }
+        
+        /* File upload styling */
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+        
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .drop-zone {
+            border: 2px dashed var(--primary);
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-dim);
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(233, 69, 96, 0.1);
+        }
+        
+        .drop-zone.dragover {
+            transform: scale(1.02);
+        }
+        
+        .format-help {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.5rem;
+            padding: 0.5rem;
+            background: var(--bg);
+            border-radius: 4px;
+        }
+        
+        .format-help code {
+            background: var(--primary);
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        
+        .sub-tabs {
+            display: flex;
+            gap: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .sub-tab {
+            padding: 0.4rem 0.8rem;
+            background: var(--bg);
+            font-size: 0.85rem;
+            border-radius: 4px;
+        }
+        
+        .sub-tab.active {
+            background: var(--primary);
+            color: var(--text);
+        }
+        
+        .import-panel {
+            display: none;
+        }
+        
+        .import-panel.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -325,6 +410,7 @@
         <div id="app" style="display: none;">
             <div class="tabs">
                 <button class="tab active" data-tab="builder">Database Builder</button>
+                <button class="tab" data-tab="import">Import CSV/JSON</button>
                 <button class="tab" data-tab="query">Query</button>
                 <button class="tab" data-tab="extractor">Extractor</button>
             </div>
@@ -357,8 +443,11 @@
                         </div>
                         
                         <div class="section">
-                            <button id="build-db">Build Database</button>
-                            <button id="clear-entries" class="btn-secondary">Clear All</button>
+                            <div class="flex-row">
+                                <button id="build-db">Build Database</button>
+                                <button id="download-db" class="btn-success" style="display: none;">⬇ Download .mxy</button>
+                                <button id="clear-entries" class="btn-secondary">Clear All</button>
+                            </div>
                         </div>
                     </div>
                     
@@ -373,6 +462,91 @@
                         <div id="db-status" class="section" style="display: none;">
                             <h3>Database Status</h3>
                             <div class="results">Database ready for queries!</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Import CSV/JSON Panel -->
+            <div id="panel-import" class="panel">
+                <div class="grid">
+                    <div>
+                        <div class="section">
+                            <h3>Import from File</h3>
+                            <div class="drop-zone" id="drop-zone">
+                                <p>📁 Drop a CSV or JSON file here</p>
+                                <p style="font-size: 0.85rem; margin-top: 0.5rem;">or click to browse</p>
+                                <input type="file" id="file-input" accept=".csv,.json,.txt">
+                            </div>
+                            <div id="file-info" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-dim);"></div>
+                        </div>
+                        
+                        <div class="section">
+                            <h3>Or Paste Data</h3>
+                            <div class="sub-tabs">
+                                <button class="sub-tab active" data-import-tab="csv">CSV</button>
+                                <button class="sub-tab" data-import-tab="json">JSON</button>
+                                <button class="sub-tab" data-import-tab="text">Text (one per line)</button>
+                            </div>
+                            
+                            <div id="import-csv" class="import-panel active">
+                                <textarea id="csv-input" placeholder="entry,category,severity
+192.168.0.0/16,private,low
+*.evil.com,malware,high
+8.8.8.8,dns,info"></textarea>
+                                <div class="format-help">
+                                    CSV format: First column must be <code>entry</code> or <code>key</code>. Other columns become metadata.
+                                </div>
+                            </div>
+                            
+                            <div id="import-json" class="import-panel">
+                                <textarea id="json-input" placeholder='[
+  {"key": "192.168.0.0/16", "data": {"category": "private"}},
+  {"key": "*.evil.com", "data": {"category": "malware", "severity": "high"}},
+  {"key": "8.8.8.8", "data": {"category": "dns"}}
+]'></textarea>
+                                <div class="format-help">
+                                    JSON format: Array of objects with <code>key</code> and optional <code>data</code> fields.
+                                </div>
+                            </div>
+                            
+                            <div id="import-text" class="import-panel">
+                                <textarea id="text-input" placeholder="192.168.0.0/16
+10.0.0.0/8
+*.evil.com
+*.phishing-*.net
+malware.org
+8.8.8.8"></textarea>
+                                <div class="format-help">
+                                    Text format: One entry per line. No metadata - just keys.
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="section">
+                            <label>
+                                <input type="checkbox" id="import-case-sensitive" checked> Case-sensitive matching
+                            </label>
+                            <div class="flex-row mt-1">
+                                <button id="import-build">Import & Build Database</button>
+                                <button id="import-download" class="btn-success" style="display: none;">⬇ Download .mxy</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <div class="section">
+                            <h3>Import Results</h3>
+                            <div id="import-results" class="results">
+                                <span style="color: var(--text-dim);">Import a CSV, JSON, or text file to build a database.</span>
+                            </div>
+                        </div>
+                        
+                        <div class="section">
+                            <h3>Preview (first 20 entries)</h3>
+                            <div id="import-preview" class="entry-list" style="max-height: 250px;">
+                                <p style="color: var(--text-dim); padding: 1rem; text-align: center;">No data imported yet.</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -489,6 +663,9 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
         let db = null;
         let extractor = null;
         let entries = [];
+        let lastBuiltBytes = null;  // Store last built database bytes for download
+        let importedBytes = null;   // Store imported database bytes for download
+        let currentImportFormat = 'csv';
         
         async function main() {
             try {
@@ -531,7 +708,11 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
             });
             document.getElementById('add-samples').addEventListener('click', loadSamples);
             document.getElementById('build-db').addEventListener('click', buildDatabase);
+            document.getElementById('download-db').addEventListener('click', downloadDatabase);
             document.getElementById('clear-entries').addEventListener('click', clearEntries);
+            
+            // Import panel
+            setupImportPanel();
             
             // Query
             document.getElementById('run-query').addEventListener('click', runQuery);
@@ -543,6 +724,273 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
             // Extractor
             document.getElementById('run-extract').addEventListener('click', runExtractor);
         }
+        
+        // ============================================================================
+        // Import Panel Functions
+        // ============================================================================
+        
+        function setupImportPanel() {
+            // Sub-tab switching for import formats
+            document.querySelectorAll('.sub-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.import-panel').forEach(p => p.classList.remove('active'));
+                    tab.classList.add('active');
+                    currentImportFormat = tab.dataset.importTab;
+                    document.getElementById(`import-${currentImportFormat}`).classList.add('active');
+                });
+            });
+            
+            // File drop zone
+            const dropZone = document.getElementById('drop-zone');
+            const fileInput = document.getElementById('file-input');
+            
+            dropZone.addEventListener('click', () => fileInput.click());
+            
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+            
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+            
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                const file = e.dataTransfer.files[0];
+                if (file) handleFileUpload(file);
+            });
+            
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) handleFileUpload(file);
+            });
+            
+            // Import button
+            document.getElementById('import-build').addEventListener('click', importAndBuild);
+            document.getElementById('import-download').addEventListener('click', downloadImportedDatabase);
+        }
+        
+        function handleFileUpload(file) {
+            const fileInfo = document.getElementById('file-info');
+            fileInfo.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                
+                // Detect format from extension or content
+                const ext = file.name.split('.').pop().toLowerCase();
+                
+                if (ext === 'json' || content.trim().startsWith('[') || content.trim().startsWith('{')) {
+                    document.getElementById('json-input').value = content;
+                    switchImportTab('json');
+                } else if (ext === 'csv' || content.includes(',')) {
+                    document.getElementById('csv-input').value = content;
+                    switchImportTab('csv');
+                } else {
+                    document.getElementById('text-input').value = content;
+                    switchImportTab('text');
+                }
+                
+                // Auto-preview
+                previewImport();
+            };
+            reader.readAsText(file);
+        }
+        
+        function switchImportTab(format) {
+            document.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.import-panel').forEach(p => p.classList.remove('active'));
+            document.querySelector(`[data-import-tab="${format}"]`).classList.add('active');
+            document.getElementById(`import-${format}`).classList.add('active');
+            currentImportFormat = format;
+        }
+        
+        function previewImport() {
+            const preview = document.getElementById('import-preview');
+            let parsedEntries = [];
+            
+            try {
+                parsedEntries = parseCurrentImport();
+                
+                if (parsedEntries.length === 0) {
+                    preview.innerHTML = '<p style="color: var(--text-dim); padding: 1rem; text-align: center;">No entries found.</p>';
+                    return;
+                }
+                
+                const displayEntries = parsedEntries.slice(0, 20);
+                preview.innerHTML = displayEntries.map(entry => `
+                    <div class="entry-item">
+                        <div>
+                            <span class="entry-key">${escapeHtml(entry.key)}</span>
+                            <span class="entry-data">${escapeHtml(JSON.stringify(entry.data))}</span>
+                        </div>
+                    </div>
+                `).join('');
+                
+                if (parsedEntries.length > 20) {
+                    preview.innerHTML += `<p style="color: var(--text-dim); padding: 0.5rem; text-align: center;">... and ${parsedEntries.length - 20} more</p>`;
+                }
+            } catch (e) {
+                preview.innerHTML = `<p style="color: var(--accent); padding: 1rem;">Parse error: ${escapeHtml(e.message)}</p>`;
+            }
+        }
+        
+        function parseCurrentImport() {
+            switch (currentImportFormat) {
+                case 'csv': return parseCSV(document.getElementById('csv-input').value);
+                case 'json': return parseJSON(document.getElementById('json-input').value);
+                case 'text': return parseText(document.getElementById('text-input').value);
+                default: return [];
+            }
+        }
+        
+        function parseCSV(content) {
+            const lines = content.trim().split('\n');
+            if (lines.length < 2) return [];
+            
+            const headers = parseCSVLine(lines[0]);
+            const entryCol = headers.findIndex(h => h.toLowerCase() === 'entry' || h.toLowerCase() === 'key');
+            
+            if (entryCol === -1) {
+                throw new Error("CSV must have an 'entry' or 'key' column");
+            }
+            
+            const dataColNames = headers.filter((_, i) => i !== entryCol);
+            const dataCols = headers.map((_, i) => i).filter(i => i !== entryCol);
+            
+            const entries = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                
+                const values = parseCSVLine(lines[i]);
+                const key = values[entryCol];
+                if (!key) continue;
+                
+                const data = {};
+                dataCols.forEach((col, idx) => {
+                    const value = values[col];
+                    if (value) {
+                        // Try to parse as number or boolean
+                        if (/^-?\d+$/.test(value)) {
+                            data[dataColNames[idx]] = parseInt(value, 10);
+                        } else if (/^-?\d*\.\d+$/.test(value)) {
+                            data[dataColNames[idx]] = parseFloat(value);
+                        } else if (value === 'true' || value === 'false') {
+                            data[dataColNames[idx]] = value === 'true';
+                        } else {
+                            data[dataColNames[idx]] = value;
+                        }
+                    }
+                });
+                
+                entries.push({ key, data });
+            }
+            
+            return entries;
+        }
+        
+        function parseCSVLine(line) {
+            const values = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                if (char === '"' && (i === 0 || line[i-1] !== '\\')) {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    values.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            values.push(current.trim());
+            
+            return values;
+        }
+        
+        function parseJSON(content) {
+            const data = JSON.parse(content);
+            if (!Array.isArray(data)) {
+                throw new Error('JSON must be an array');
+            }
+            
+            return data.map((item, i) => {
+                const key = item.key || item.entry;
+                if (!key) {
+                    throw new Error(`Missing 'key' field at index ${i}`);
+                }
+                return {
+                    key,
+                    data: item.data || {}
+                };
+            });
+        }
+        
+        function parseText(content) {
+            return content
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'))
+                .map(key => ({ key, data: {} }));
+        }
+        
+        function importAndBuild() {
+            const resultsDiv = document.getElementById('import-results');
+            
+            try {
+                const parsedEntries = parseCurrentImport();
+                
+                if (parsedEntries.length === 0) {
+                    resultsDiv.innerHTML = '<span class="result-not-found">No entries to import!</span>';
+                    return;
+                }
+                
+                const caseSensitive = document.getElementById('import-case-sensitive').checked;
+                const builder = new DatabaseBuilder(caseSensitive);
+                
+                let errors = 0;
+                for (const entry of parsedEntries) {
+                    try {
+                        builder.addEntry(entry.key, entry.data);
+                    } catch (e) {
+                        errors++;
+                        console.warn(`Failed to add entry "${entry.key}":`, e);
+                    }
+                }
+                
+                const bytes = builder.build();
+                db = new Database(bytes);
+                importedBytes = bytes;
+                
+                const sizeKB = (bytes.length / 1024).toFixed(2);
+                resultsDiv.innerHTML = 
+                    `<span class="result-found">✓ Database built successfully!</span>\n\n` +
+                    `Format: ${currentImportFormat.toUpperCase()}\n` +
+                    `Entries imported: ${parsedEntries.length}${errors > 0 ? ` (${errors} errors)` : ''}\n` +
+                    `Database size: ${sizeKB} KB\n` +
+                    `Case-sensitive: ${caseSensitive}\n\n` +
+                    `Ready for queries! Go to the Query tab to test.`;
+                
+                // Show download button
+                document.getElementById('import-download').style.display = 'inline-block';
+                
+                // Update preview
+                previewImport();
+                
+            } catch (e) {
+                resultsDiv.innerHTML = `<span class="result-not-found">✗ Import failed</span>\n\nError: ${escapeHtml(e.message)}`;
+            }
+        }
+        
+        // ============================================================================
+        // Builder Panel Functions
+        // ============================================================================
         
         function addEntry() {
             const keyInput = document.getElementById('entry-key');
@@ -581,8 +1029,10 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
         function clearEntries() {
             entries = [];
             db = null;
+            lastBuiltBytes = null;
             updateEntryList();
             document.getElementById('db-status').style.display = 'none';
+            document.getElementById('download-db').style.display = 'none';
         }
         
         function removeEntry(index) {
@@ -630,6 +1080,7 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
                 
                 const bytes = builder.build();
                 db = new Database(bytes);
+                lastBuiltBytes = bytes;  // Store for download
                 
                 document.getElementById('db-status').style.display = 'block';
                 document.getElementById('db-status').querySelector('.results').innerHTML = 
@@ -637,11 +1088,46 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
                     `Entries: ${entries.length}\n` +
                     `Size: ${(bytes.length / 1024).toFixed(2)} KB\n` +
                     `Case-sensitive: ${caseSensitive}`;
+                
+                // Show download button
+                document.getElementById('download-db').style.display = 'inline-block';
                     
             } catch (e) {
                 alert('Failed to build database: ' + e.message);
             }
         }
+        
+        function downloadDatabase() {
+            if (!lastBuiltBytes) {
+                alert('Build a database first!');
+                return;
+            }
+            downloadBytes(lastBuiltBytes, 'database.mxy');
+        }
+        
+        function downloadImportedDatabase() {
+            if (!importedBytes) {
+                alert('Import and build a database first!');
+                return;
+            }
+            downloadBytes(importedBytes, 'database.mxy');
+        }
+        
+        function downloadBytes(bytes, filename) {
+            const blob = new Blob([bytes], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        
+        // ============================================================================
+        // Query Functions
+        // ============================================================================
         
         function runQuery() {
             if (!db) {
@@ -697,6 +1183,10 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
             document.getElementById('stat-time').textContent = elapsed.toFixed(2);
         }
         
+        // ============================================================================
+        // Extractor Functions
+        // ============================================================================
+        
         function runExtractor() {
             const text = document.getElementById('extract-input').value;
             if (!text) return;
@@ -736,6 +1226,10 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
             
             document.getElementById('entity-list').textContent = listHtml || 'No entities found.';
         }
+        
+        // ============================================================================
+        // Utilities
+        // ============================================================================
         
         function escapeHtml(text) {
             const div = document.createElement('div');

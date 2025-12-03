@@ -2,6 +2,54 @@
 
 Interactive demo for matchy-wasm running entirely in the browser.
 
+## Features
+
+### Database Builder Tab
+- Add entries manually (IP addresses, CIDRs, glob patterns, literals)
+- Attach JSON metadata to each entry
+- Load sample entries to try out the system
+- **Download** the built database as a `.mxy` file
+
+### Import CSV/JSON Tab
+- **Upload files** via drag & drop or file picker
+- **Paste data** directly in CSV, JSON, or text format
+- Auto-detects format from file extension/content
+- Preview parsed entries before building
+- Build and download the resulting database
+
+**Supported Formats:**
+
+**CSV** (like command-line `matchy build -f csv`):
+```csv
+entry,category,severity
+192.168.0.0/16,private,low
+*.evil.com,malware,high
+```
+
+**JSON** (like command-line `matchy build -f json`):
+```json
+[
+  {"key": "192.168.0.0/16", "data": {"category": "private"}},
+  {"key": "*.evil.com", "data": {"severity": "high"}}
+]
+```
+
+**Text** (like command-line `matchy build -f text`):
+```
+192.168.0.0/16
+*.evil.com
+malware.org
+```
+
+### Query Tab
+- Test lookups against the built database
+- Single query or batch mode
+- See match results with timing
+
+### Extractor Tab
+- Extract IPs, domains, emails, hashes, crypto addresses from text
+- Highlighted visualization of extracted entities
+
 ## Running Locally
 
 ```bash
