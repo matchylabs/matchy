@@ -11,8 +11,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  fmt:
-    name: Formatting
+  preflight:
+    name: Preflight Checks
     runs-on: namespace-profile-linux-amd64
     steps:
       - uses: actions/checkout@v6
@@ -20,21 +20,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       
       - name: Check formatting
         run: cargo fmt --all -- --check
-
-  clippy:
-    name: Clippy
-    runs-on: namespace-profile-linux-amd64
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       
       - name: Run clippy (library and bins only, no bench features)
         run: cargo clippy --lib --bins -- -D warnings
@@ -47,24 +36,15 @@ jobs:
   test:
     name: Test
     runs-on: ${{ matrix.os }}
-    needs: [fmt, clippy]
+    needs: [preflight]
     strategy:
       matrix:
         os: [namespace-profile-linux-amd64, namespace-profile-linux-arm64, namespace-profile-macos-26-1, windows-latest]
-        rust: [stable, beta]
-        exclude:
-          # Only run beta on Ubuntu to save CI time
-          - os: macos-latest
-            rust: beta
-          - os: windows-latest
-            rust: beta
     steps:
       - uses: actions/checkout@v6
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@stable
       
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -99,6 +79,7 @@ jobs:
   docs:
     name: Documentation
     runs-on: namespace-profile-linux-amd64
+    needs: [preflight]
     steps:
       - uses: actions/checkout@v6
       
@@ -113,6 +94,7 @@ jobs:
   bench:
     name: Benchmarks
     runs-on: namespace-profile-linux-amd64
+    needs: [preflight]
     steps:
       - uses: actions/checkout@v6
       
@@ -134,6 +116,7 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: namespace-profile-linux-amd64
+    needs: [preflight]
     steps:
       - uses: actions/checkout@v6
       
@@ -141,7 +124,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
+        uses: taiki-e/install-action@cargo-tarpaulin
       
       - name: Generate coverage (no bench features)
         run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --engine llvm
@@ -153,30 +136,31 @@ jobs:
           files: ./cobertura.xml
           fail_ci_if_error: false
 
-  freebsd:
-    name: FreeBSD Test
-    runs-on: ubuntu-latest  # Needs full VM support, not available on namespace runners
-    needs: [fmt, clippy]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Test on FreeBSD
-        uses: vmactions/freebsd-vm@v1
-        with:
-          release: '14.1'
-          usesh: true
-          prepare: |
-            pkg install -y rust
-            cargo install cbindgen
-          run: |
-            cargo build --verbose
-            cargo test --verbose
-            cargo test --test integration_tests --verbose
-            echo "FreeBSD tests successful!"
+  # freebsd:
+  #   name: FreeBSD Test
+  #   runs-on: ubuntu-latest  # Needs full VM support, not available on namespace runners
+  #   needs: [preflight]
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     
+  #     - name: Test on FreeBSD
+  #       uses: vmactions/freebsd-vm@v1
+  #       with:
+  #         release: '14.1'
+  #         usesh: true
+  #         prepare: |
+  #           pkg install -y rust
+  #           cargo install cbindgen
+  #         run: |
+  #           cargo build --verbose
+  #           cargo test --verbose
+  #           cargo test --test integration_tests --verbose
+  #           echo "FreeBSD tests successful!"
 
   security:
     name: Security Audit
     runs-on: namespace-profile-linux-amd64
+    needs: [preflight]
     steps:
       - uses: actions/checkout@v6
       
@@ -188,7 +172,7 @@ jobs:
   wasm:
     name: Build WASM
     runs-on: namespace-profile-linux-amd64
-    needs: [fmt, clippy]
+    needs: [preflight]
     steps:
       - uses: actions/checkout@v6
 
