@@ -16,8 +16,8 @@ pub fn bench_literal_database(config: BenchConfig) -> Result<()> {
         cache_size,
         cache_hit_rate,
     } = config;
-    use matchy::mmdb_builder::DatabaseBuilder;
     use matchy::Database;
+    use matchy::DatabaseBuilder;
     use matchy::MatchMode;
 
     println!("--- Phase 1: Build Literal Database ---");

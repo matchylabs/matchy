@@ -2,8 +2,8 @@
 //!
 //! Demonstrates how to build a database with IP addresses and CIDR ranges.
 
-use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
+use matchy::DatabaseBuilder;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

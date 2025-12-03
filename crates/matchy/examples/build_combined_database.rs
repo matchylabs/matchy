@@ -3,8 +3,8 @@
 //! This demonstrates the POWER of the extended MMDB format:
 //! A single database that can query both IP addresses AND patterns!
 
-use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
+use matchy::DatabaseBuilder;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

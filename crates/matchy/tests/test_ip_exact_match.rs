@@ -4,8 +4,8 @@
 //! only those exact IPs are matched, not broader CIDR ranges.
 
 use matchy::database::Database;
-use matchy::mmdb_builder::DatabaseBuilder;
 use matchy::DataValue;
+use matchy::DatabaseBuilder;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

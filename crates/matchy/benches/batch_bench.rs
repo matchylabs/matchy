@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use matchy::MatchMode;
-use matchy::bench_api::Paraglob;
+use matchy_paraglob::Paraglob;
 use std::hint::black_box;
 
 fn generate_texts(count: usize, size: usize) -> Vec<Vec<u8>> {

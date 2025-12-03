@@ -1,5 +1,5 @@
 use matchy::database::Database;
-use matchy::mmdb_builder::DatabaseBuilder;
+use matchy::DatabaseBuilder;
 use matchy::MatchMode;
 use std::collections::HashMap;
 

@@ -3,12 +3,8 @@
 //! These tests verify end-to-end functionality of the pattern matcher
 //! including edge cases, complex patterns, and real-world scenarios.
 
-#![cfg(feature = "bench-internal")]
-
-use matchy::bench_api::Paraglob;
-use matchy::serialization::{from_bytes, to_bytes};
-use matchy::DataValue;
-use matchy::MatchMode;
+use matchy_data_format::DataValue;
+use matchy_paraglob::{MatchMode, Paraglob, ParaglobBuilder};
 use std::collections::HashMap;
 
 #[test]
@@ -405,11 +401,9 @@ fn test_v2_roundtrip_serialization() {
     )
     .unwrap();
 
-    // Serialize
-    let bytes = to_bytes(&pg);
-
-    // Deserialize
-    let pg2 = from_bytes(&bytes, MatchMode::CaseSensitive).unwrap();
+    // Serialize and deserialize
+    let bytes = pg.buffer().to_vec();
+    let pg2 = Paraglob::from_buffer(bytes, MatchMode::CaseSensitive).unwrap();
 
     // Verify format
     assert!(pg2.has_data_section(), "Deserialized should be v2 format");
@@ -622,8 +616,8 @@ fn test_v2_all_mmdb_data_types() {
     .unwrap();
 
     // Serialize and deserialize to test all types survive roundtrip
-    let bytes = to_bytes(&pg);
-    let pg2 = from_bytes(&bytes, MatchMode::CaseSensitive).unwrap();
+    let bytes = pg.buffer().to_vec();
+    let pg2 = Paraglob::from_buffer(bytes, MatchMode::CaseSensitive).unwrap();
 
     let data = pg2.get_pattern_data(0).expect("Should have data");
 
@@ -648,8 +642,6 @@ fn test_v2_all_mmdb_data_types() {
 
 #[test]
 fn test_v2_incremental_builder() {
-    use matchy::bench_api::ParaglobBuilder;
-
     let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
 
     // Add patterns incrementally
@@ -692,8 +684,6 @@ fn test_v2_incremental_builder() {
 
 #[test]
 fn test_v2_incremental_builder_duplicate_handling() {
-    use matchy::bench_api::ParaglobBuilder;
-
     let mut builder = ParaglobBuilder::new(MatchMode::CaseSensitive);
 
     // Add same pattern twice

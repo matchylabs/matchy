@@ -4,7 +4,7 @@
 //! containing IP addresses and patterns. This is the primary public API.
 
 use crate::database::{Database, DatabaseError, DatabaseStatsSnapshot, QueryResult};
-use crate::mmdb_builder::DatabaseBuilder;
+use crate::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
 use std::collections::HashMap;

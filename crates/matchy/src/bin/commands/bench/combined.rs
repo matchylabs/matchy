@@ -14,8 +14,8 @@ pub fn bench_combined_database(
     cache_size: usize,
     cache_hit_rate: usize,
 ) -> Result<()> {
-    use matchy::mmdb_builder::DatabaseBuilder;
     use matchy::Database;
+    use matchy::DatabaseBuilder;
     use matchy::MatchMode;
 
     println!("--- Phase 1: Build Combined Database ---");

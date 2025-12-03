@@ -51,7 +51,7 @@
 //! ```
 
 use crate::error::ParaglobError;
-use crate::mmdb_builder::DatabaseBuilder;
+use crate::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
 use serde::{Deserialize, Deserializer, Serialize};

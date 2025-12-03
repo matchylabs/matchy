@@ -68,9 +68,6 @@ cli = ["clap", "ctrlc", "csv"]
 # C API feature (disabled on WASM targets via conditional compilation)
 c-api = []
 
-# Benchmarks can access internal APIs when this feature is enabled
-bench-internal = []
-
 # cargo-c requires a capi feature to identify C-compatible libraries
 capi = []
 # Enable dhat heap profiling in benchmarks (dhat is always available as dev-dep)
@@ -151,7 +148,6 @@ harness = false
 name = "query_profile"
 path = "benches/query_profile.rs"
 harness = false
-required-features = ["bench-internal"]
 
 # Auto-reload overhead benchmark (lock-free Arc vs RwLock)
 [[bench]]

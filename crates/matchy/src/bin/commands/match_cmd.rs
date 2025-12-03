@@ -14,7 +14,7 @@ use crate::match_processor::{
     analyze_performance, follow_files, follow_files_parallel, process_file_with_aggregate,
     process_parallel, ProcessingStats,
 };
-use matchy::{mmdb_builder::DatabaseBuilder, DataValue, MatchMode};
+use matchy::{DataValue, DatabaseBuilder, MatchMode};
 
 /// Check if the given path is a source file (JSON or CSV) that needs to be built
 fn is_source_file(path: &Path) -> Option<&'static str> {

@@ -67,11 +67,8 @@ jobs:
       - name: Build
         run: cargo build --verbose
       
-      - name: Run tests (lib/bins/tests only; skip doctests; enable bench-internal for test needs)
-        run: cargo test --verbose --lib --bins --tests --features bench-internal
-      
-      - name: Run integration tests explicitly
-        run: cargo test --test integration_tests --verbose --features bench-internal
+      - name: Run tests (lib/bins/tests only; skip doctests)
+        run: cargo test --verbose --lib --bins --tests
       
       - name: Run examples (public API only)
         run: cargo run --example cache_demo
@@ -107,11 +104,11 @@ jobs:
   #         path: target
   #         key: ${{ runner.os }}-cargo-bench
   #     
-  #     - name: Compile benchmarks (bench-internal)
-  #       run: cargo bench --no-run --features bench-internal
+  #     - name: Compile benchmarks
+  #       run: cargo bench --no-run
   #     
-  #     - name: Run benchmark smoke test (bench-internal)
-  #       run: cargo bench --features bench-internal -- --test
+  #     - name: Run benchmark smoke test
+  #       run: cargo bench -- --test
 
   coverage:
     name: Code Coverage
@@ -156,7 +153,6 @@ jobs:
   #         run: |
   #           cargo build --verbose
   #           cargo test --verbose
-  #           cargo test --test integration_tests --verbose
   #           echo "FreeBSD tests successful!"
 
   security:

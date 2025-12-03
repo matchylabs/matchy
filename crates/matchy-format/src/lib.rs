@@ -10,14 +10,15 @@
 // Public modules
 pub mod error;
 pub mod mmdb;
-pub mod mmdb_builder;
 pub mod offset_format;
+
+// Internal modules (types re-exported below)
+mod mmdb_builder;
 mod validation;
 
-pub use validation::{validate_data_mapping_consistency, FormatStats, FormatValidationResult};
-
-// Re-exports for convenience
+// Re-exports
 pub use error::FormatError;
 pub use matchy_literal_hash;
-pub use mmdb_builder::DatabaseBuilder;
+pub use mmdb_builder::{BuilderStats, DatabaseBuilder, EntryType};
 pub use offset_format::*;
+pub use validation::{validate_data_mapping_consistency, FormatStats, FormatValidationResult};

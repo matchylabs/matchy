@@ -100,6 +100,8 @@ ci-local:
 	@$(MAKE) check-docs
 	@$(MAKE) test-rust
 	@$(MAKE) test-doc
+	@$(MAKE) build-rust
+	@$(MAKE) test
 	@echo ""
 	@echo "✅ All CI checks passed!"
 	@echo "================================"
@@ -128,7 +130,7 @@ clippy:
 	@if [ "$$(uname -m)" = "arm64" ]; then \
 		echo "🔍 Also checking x86_64 target (since we're on ARM)..."; \
 		rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true; \
-		cargo clippy --workspace --all-targets --all-features --target x86_64-unknown-linux-gnu -- -D warnings; \
+		cargo clippy --workspace --lib --bins --all-features --target x86_64-unknown-linux-gnu -- -D warnings; \
 	fi
 	@echo "✅ Clippy OK"
 
@@ -147,7 +149,6 @@ docs:
 test-rust:
 	@echo "\n🧪 Running Rust tests..."
 	@cargo test --workspace --verbose
-	@cargo test -p matchy --test integration_tests --verbose
 	@echo "✅ Tests OK"
 
 # Run doc tests

@@ -3,7 +3,7 @@
 //! This example shows how to configure and use the LRU cache for
 //! high-throughput workloads with repeated queries.
 
-use matchy::{mmdb_builder::DatabaseBuilder, DataValue, Database, MatchMode};
+use matchy::{DataValue, Database, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 use std::time::Instant;
 

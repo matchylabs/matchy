@@ -36,7 +36,7 @@
 //! ```
 
 use crate::error::{MatchyError, Result};
-use crate::offset_format::{
+use matchy_format::offset_format::{
     ParaglobHeader, MAGIC, MATCHY_FORMAT_VERSION, MATCHY_FORMAT_VERSION_V1,
     MATCHY_FORMAT_VERSION_V2, MATCHY_FORMAT_VERSION_V3,
 };

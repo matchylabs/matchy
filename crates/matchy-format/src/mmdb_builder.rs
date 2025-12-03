@@ -72,7 +72,7 @@ impl DatabaseBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy_format::mmdb_builder::DatabaseBuilder;
+    /// use matchy_format::DatabaseBuilder;
     /// use matchy_match_mode::MatchMode;
     ///
     /// let builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
@@ -90,7 +90,7 @@ impl DatabaseBuilder {
     ///
     /// # Example
     /// ```
-    /// use matchy_format::mmdb_builder::DatabaseBuilder;
+    /// use matchy_format::DatabaseBuilder;
     /// use matchy_match_mode::MatchMode;
     ///
     /// let builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
@@ -133,7 +133,7 @@ impl DatabaseBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
+    /// # use matchy_format::DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -165,7 +165,7 @@ impl DatabaseBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
+    /// # use matchy_format::DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -222,7 +222,7 @@ impl DatabaseBuilder {
     ///
     /// # Example
     /// ```
-    /// # use matchy_format::mmdb_builder::DatabaseBuilder as DatabaseBuilder;
+    /// # use matchy_format::DatabaseBuilder;
     /// # use matchy_match_mode::MatchMode;
     /// # use matchy_data_format::DataValue;
     /// # use std::collections::HashMap;
@@ -292,7 +292,7 @@ impl DatabaseBuilder {
     ///
     /// # Examples
     /// ```
-    /// # use matchy_format::mmdb_builder::{DatabaseBuilder, EntryType};
+    /// # use matchy_format::{DatabaseBuilder, EntryType};
     /// # use matchy_match_mode::MatchMode;
     /// // Auto-detection
     /// assert!(matches!(DatabaseBuilder::detect_entry_type("1.2.3.4"), Ok(EntryType::IpAddress { .. })));

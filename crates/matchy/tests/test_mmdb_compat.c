@@ -8,7 +8,7 @@
 #include <arpa/inet.h>
 
 #define TEST_DB_PATH "/tmp/matchy_mmdb_test.db"
-#define GEOLITE_DB_PATH "tests/data/GeoLite2-Country.mmdb"
+#define GEOLITE_DB_PATH "crates/matchy/tests/data/GeoLite2-Country.mmdb"
 #define PASSED_COLOR "\033[32m"
 #define FAILED_COLOR "\033[31m"
 #define RESET_COLOR "\033[0m"

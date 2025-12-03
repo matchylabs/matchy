@@ -100,15 +100,8 @@ pub mod file_reader;
 /// MISP JSON threat intelligence importer
 pub mod misp_importer;
 
-// Re-export format modules from matchy-format
-/// MMDB format implementation (internal)
+// Internal format imports (not re-exported to users)
 use matchy_format::mmdb;
-/// Unified MMDB builder
-pub use matchy_format::mmdb_builder;
-/// Offset format structures
-pub use matchy_format::offset_format;
-/// Literal string hash table for O(1) exact matching
-pub use matchy_literal_hash as literal_hash;
 
 /// Batch processing infrastructure for efficient file analysis
 ///
@@ -117,8 +110,6 @@ pub use matchy_literal_hash as literal_hash;
 /// - `Worker` - Processes batches with extraction + matching  
 /// - `LineBatch`, `MatchResult`, `LineMatch` - Data structures
 pub mod processing;
-#[cfg(feature = "bench-internal")]
-pub mod serialization;
 /// SIMD-accelerated utilities for pattern matching
 ///
 /// Provides optimized implementations of common operations using SIMD instructions:
@@ -142,13 +133,6 @@ pub mod watching_database;
 // Public C API (native platforms only - FFI not available on WASM)
 #[cfg(not(target_family = "wasm"))]
 pub mod c_api;
-
-// Bench-only internal API surface (kept out of public builds)
-#[cfg(feature = "bench-internal")]
-#[doc(hidden)]
-pub mod bench_api {
-    pub use matchy_paraglob::{Paraglob, ParaglobBuilder};
-}
 
 // Re-exports for Rust consumers
 
@@ -202,14 +186,14 @@ pub use crate::watching_database::{ReloadCallback, ReloadEvent, WatchingDatabase
 /// let db_bytes = builder.build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub use matchy_format::mmdb_builder::DatabaseBuilder;
+pub use matchy_format::DatabaseBuilder;
 
 /// Entry type classification for database builder
 ///
 /// Represents whether an entry should be treated as an IP address, literal string,
 /// or glob pattern. Used with [`DatabaseBuilder::detect_entry_type`] for explicit
 /// type control.
-pub use matchy_format::mmdb_builder::EntryType;
+pub use matchy_format::EntryType;
 
 // Version information
 /// Library version string

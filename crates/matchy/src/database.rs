@@ -8,10 +8,10 @@
 //! The database format is automatically detected and the appropriate
 //! lookup method is used transparently.
 
-use crate::literal_hash::LiteralHash;
 use crate::mmdb::{MmdbError, MmdbHeader, SearchTree};
 use lru::LruCache;
 use matchy_data_format::DataValue;
+use matchy_literal_hash::LiteralHash;
 use matchy_paraglob::Paraglob;
 use std::cell::RefCell;
 use std::hash::BuildHasherDefault;

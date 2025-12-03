@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use matchy::{mmdb_builder::DatabaseBuilder, Database, MatchMode};
+use matchy::{Database, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::time::Duration;
