@@ -21,9 +21,14 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
+
+      - name: Set up Rust cache
+        uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
 
       - name: Setup mdBook
         uses: peaceiris/actions-mdbook@v2

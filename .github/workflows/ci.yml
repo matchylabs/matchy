@@ -15,7 +15,7 @@ jobs:
     name: Preflight Checks
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
       
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
@@ -41,7 +41,15 @@ jobs:
       matrix:
         os: [namespace-profile-linux-amd64, namespace-profile-linux-arm64, namespace-profile-macos-26-1, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      # Namespace runners: use cached checkout
+      - name: Checkout (Namespace)
+        if: ${{ !contains(matrix.os, 'windows') }}
+        uses: namespacelabs/nscloud-checkout-action@v8
+      
+      # Windows: use standard checkout
+      - name: Checkout (Windows)
+        if: ${{ contains(matrix.os, 'windows') }}
+        uses: actions/checkout@v6
       
       # Namespace runners: use composite action
       - name: Setup Rust (Namespace)
@@ -80,7 +88,7 @@ jobs:
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
       
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
@@ -117,7 +125,7 @@ jobs:
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
       
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
@@ -161,7 +169,7 @@ jobs:
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
       
       - name: Run security audit
         uses: rustsec/audit-check@v2
@@ -173,7 +181,7 @@ jobs:
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
-      - uses: actions/checkout@v6
+      - uses: namespacelabs/nscloud-checkout-action@v8
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
