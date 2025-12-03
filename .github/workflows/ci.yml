@@ -177,7 +177,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   wasm:
-    name: Build WASM
+    name: Check WASM
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
@@ -188,38 +188,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Check WASM compilation
+        run: cargo check -p matchy-wasm --target wasm32-unknown-unknown
 
-      - name: Build WASM (debug check)
-        run: cargo build -p matchy-wasm --target wasm32-unknown-unknown
-
-      - name: Build WASM package (web target)
-        run: wasm-pack build crates/matchy-wasm --target web --out-dir demo/pkg
-
-      - name: Build npm package (bundler target)
-        run: wasm-pack build crates/matchy-wasm --target bundler --out-dir pkg-npm
-
-      - name: Upload demo artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchy-wasm-demo
-          path: crates/matchy-wasm/demo/
-          retention-days: 7
-
-      - name: Upload npm package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchy-wasm-npm
-          path: crates/matchy-wasm/pkg-npm/
-          retention-days: 7
-
-      - name: Build WASI (for fluent-bit-matchy compatibility)
-        run: cargo build -p matchy --target wasm32-wasip1 --release --no-default-features
-
-      - name: Upload WASI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchy-wasi
-          path: target/wasm32-wasip1/release/matchy.wasm
-          retention-days: 7
+      - name: Check WASI compilation
+        run: cargo check -p matchy --target wasm32-wasip1 --no-default-features

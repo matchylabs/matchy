@@ -80,9 +80,49 @@ jobs:
             ${{ matrix.asset_name }}.zip
           if-no-files-found: error
 
+  build-wasm:
+    name: Build WASM/WASI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM npm package
+        run: wasm-pack build crates/matchy-wasm --target bundler --out-dir pkg-npm
+
+      - name: Create WASM tarball
+        run: |
+          cd crates/matchy-wasm
+          tar czf matchy-wasm-npm.tar.gz pkg-npm
+          mv matchy-wasm-npm.tar.gz $GITHUB_WORKSPACE/
+
+      - name: Build WASI module
+        run: cargo build -p matchy --target wasm32-wasip1 --release --no-default-features
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: matchy-wasm-npm
+          path: matchy-wasm-npm.tar.gz
+          if-no-files-found: error
+
+      - name: Upload WASI artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: matchy-wasi
+          path: target/wasm32-wasip1/release/matchy.wasm
+          if-no-files-found: error
+
   create-release:
     name: Create GitHub Release
-    needs: build-release
+    needs: [build-release, build-wasm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
