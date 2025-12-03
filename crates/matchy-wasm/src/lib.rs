@@ -3,12 +3,12 @@
 //! This crate provides JavaScript/TypeScript bindings for matchy's core functionality:
 //! - **Database**: Load and query matchy databases
 //! - **DatabaseBuilder**: Create databases with IPs, domains, and patterns
-//! - **Extractor**: Extract IPs, domains, emails, and hashes from text
+//! - **ExtractorBuilder**: Configure and create extractors for IPs, domains, emails, hashes, etc.
 //!
 //! # Example (JavaScript)
 //!
 //! ```javascript
-//! import init, { Database, DatabaseBuilder, Extractor } from 'matchy-wasm';
+//! import init, { Database, DatabaseBuilder, ExtractorBuilder } from 'matchy-wasm';
 //!
 //! await init();
 //!
@@ -23,12 +23,23 @@
 //! const result = db.lookup("malware.evil.com");
 //! console.log(result); // { category: "malware" }
 //!
-//! // Extract entities from text
-//! const extractor = new Extractor();
+//! // Extract entities from text (all types enabled by default)
+//! const extractor = new ExtractorBuilder().build();
 //! const entities = extractor.extract("Contact admin@example.com or visit evil.com");
 //! console.log(entities);
 //! // [{ type: "Email", value: "admin@example.com", start: 8, end: 25 },
 //! //  { type: "Domain", value: "evil.com", start: 35, end: 43 }]
+//!
+//! // Extract only IPs (more efficient - skips other extraction work)
+//! const ipExtractor = new ExtractorBuilder()
+//!     .extractDomains(false)
+//!     .extractEmails(false)
+//!     .extractHashes(false)
+//!     .extractBitcoin(false)
+//!     .extractEthereum(false)
+//!     .extractMonero(false)
+//!     .build();
+//! const ips = ipExtractor.extract("Server 192.168.1.1 responded");
 //! ```
 
 use matchy::extractor::{ExtractedItem, Extractor as MatchyExtractor, HashType};
@@ -286,9 +297,152 @@ impl DatabaseBuilder {
 // Extractor
 // ============================================================================
 
+/// Builder for creating configured extractors
+///
+/// Use this to create an extractor that only extracts the entity types you need.
+/// This is more efficient than extracting everything and filtering.
+///
+/// @example
+/// ```javascript
+/// // Extract only IPs - skips domain/email/hash extraction work
+/// const ipExtractor = new ExtractorBuilder()
+///     .extractIpv4(true)
+///     .extractIpv6(true)
+///     .extractDomains(false)
+///     .extractEmails(false)
+///     .extractHashes(false)
+///     .extractBitcoin(false)
+///     .extractEthereum(false)
+///     .extractMonero(false)
+///     .build();
+///
+/// const ips = ipExtractor.extract(text);
+/// ```
+#[wasm_bindgen]
+pub struct ExtractorBuilder {
+    extract_domains: bool,
+    extract_emails: bool,
+    extract_ipv4: bool,
+    extract_ipv6: bool,
+    extract_hashes: bool,
+    extract_bitcoin: bool,
+    extract_ethereum: bool,
+    extract_monero: bool,
+    min_domain_labels: usize,
+}
+
+#[wasm_bindgen]
+impl ExtractorBuilder {
+    /// Create a new ExtractorBuilder with all extractors enabled by default
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> ExtractorBuilder {
+        ExtractorBuilder {
+            extract_domains: true,
+            extract_emails: true,
+            extract_ipv4: true,
+            extract_ipv6: true,
+            extract_hashes: true,
+            extract_bitcoin: true,
+            extract_ethereum: true,
+            extract_monero: true,
+            min_domain_labels: 2,
+        }
+    }
+
+    /// Enable or disable domain extraction
+    #[wasm_bindgen(js_name = extractDomains)]
+    pub fn extract_domains(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_domains = enable;
+        self
+    }
+
+    /// Enable or disable email extraction
+    #[wasm_bindgen(js_name = extractEmails)]
+    pub fn extract_emails(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_emails = enable;
+        self
+    }
+
+    /// Enable or disable IPv4 extraction
+    #[wasm_bindgen(js_name = extractIpv4)]
+    pub fn extract_ipv4(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_ipv4 = enable;
+        self
+    }
+
+    /// Enable or disable IPv6 extraction
+    #[wasm_bindgen(js_name = extractIpv6)]
+    pub fn extract_ipv6(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_ipv6 = enable;
+        self
+    }
+
+    /// Enable or disable hash extraction (MD5, SHA1, SHA256, SHA384, SHA512)
+    #[wasm_bindgen(js_name = extractHashes)]
+    pub fn extract_hashes(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_hashes = enable;
+        self
+    }
+
+    /// Enable or disable Bitcoin address extraction
+    #[wasm_bindgen(js_name = extractBitcoin)]
+    pub fn extract_bitcoin(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_bitcoin = enable;
+        self
+    }
+
+    /// Enable or disable Ethereum address extraction
+    #[wasm_bindgen(js_name = extractEthereum)]
+    pub fn extract_ethereum(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_ethereum = enable;
+        self
+    }
+
+    /// Enable or disable Monero address extraction
+    #[wasm_bindgen(js_name = extractMonero)]
+    pub fn extract_monero(mut self, enable: bool) -> ExtractorBuilder {
+        self.extract_monero = enable;
+        self
+    }
+
+    /// Set minimum number of domain labels (default: 2 for "example.com")
+    #[wasm_bindgen(js_name = minDomainLabels)]
+    pub fn min_domain_labels(mut self, min: usize) -> ExtractorBuilder {
+        self.min_domain_labels = min;
+        self
+    }
+
+    /// Build the configured Extractor
+    #[wasm_bindgen]
+    pub fn build(self) -> Result<Extractor, JsError> {
+        use matchy::extractor::ExtractorBuilder as RustExtractorBuilder;
+
+        let inner = RustExtractorBuilder::new()
+            .extract_domains(self.extract_domains)
+            .extract_emails(self.extract_emails)
+            .extract_ipv4(self.extract_ipv4)
+            .extract_ipv6(self.extract_ipv6)
+            .extract_hashes(self.extract_hashes)
+            .extract_bitcoin(self.extract_bitcoin)
+            .extract_ethereum(self.extract_ethereum)
+            .extract_monero(self.extract_monero)
+            .min_domain_labels(self.min_domain_labels)
+            .build()
+            .map_err(|e| JsError::new(&format!("Failed to build extractor: {}", e)))?;
+
+        Ok(Extractor { inner })
+    }
+}
+
+impl Default for ExtractorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Extract structured entities from text
 ///
-/// Finds IP addresses, domains, emails, and cryptographic hashes in text.
+/// Create using ExtractorBuilder to configure which entity types to extract.
 #[wasm_bindgen]
 pub struct Extractor {
     inner: MatchyExtractor,
@@ -310,15 +464,9 @@ struct ExtractedEntity {
 
 #[wasm_bindgen]
 impl Extractor {
-    /// Create a new Extractor
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Result<Extractor, JsError> {
-        let inner = MatchyExtractor::new()
-            .map_err(|e| JsError::new(&format!("Failed to create: {}", e)))?;
-        Ok(Extractor { inner })
-    }
-
-    /// Extract all entities from text
+    /// Extract entities from text
+    ///
+    /// Only extracts entity types that were enabled when building this extractor.
     ///
     /// @param text - Input text to search
     /// @returns Array of extracted entities with type, value, start, and end
@@ -354,115 +502,6 @@ impl Extractor {
             .collect();
 
         serde_wasm_bindgen::to_value(&entities).map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Extract only IP addresses from text
-    ///
-    /// @param text - Input text to search
-    /// @returns Array of extracted IP addresses
-    #[wasm_bindgen(js_name = extractIps)]
-    pub fn extract_ips(&self, text: &str) -> Result<JsValue, JsError> {
-        let matches = self.inner.extract_from_chunk(text.as_bytes());
-        let ips: Vec<ExtractedEntity> = matches
-            .iter()
-            .filter(|m| matches!(m.item, ExtractedItem::Ipv4(_) | ExtractedItem::Ipv6(_)))
-            .map(|m| {
-                let entity_type = match &m.item {
-                    ExtractedItem::Ipv4(_) => "IPv4",
-                    ExtractedItem::Ipv6(_) => "IPv6",
-                    _ => unreachable!(),
-                };
-                ExtractedEntity {
-                    entity_type: entity_type.to_string(),
-                    value: m.as_str(text.as_bytes()).to_string(),
-                    start: m.span.0,
-                    end: m.span.1,
-                }
-            })
-            .collect();
-
-        serde_wasm_bindgen::to_value(&ips).map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Extract only domains from text
-    ///
-    /// @param text - Input text to search
-    /// @returns Array of extracted domains
-    #[wasm_bindgen(js_name = extractDomains)]
-    pub fn extract_domains(&self, text: &str) -> Result<JsValue, JsError> {
-        let matches = self.inner.extract_from_chunk(text.as_bytes());
-        let domains: Vec<ExtractedEntity> = matches
-            .iter()
-            .filter(|m| matches!(m.item, ExtractedItem::Domain(_)))
-            .map(|m| ExtractedEntity {
-                entity_type: "Domain".to_string(),
-                value: m.as_str(text.as_bytes()).to_string(),
-                start: m.span.0,
-                end: m.span.1,
-            })
-            .collect();
-
-        serde_wasm_bindgen::to_value(&domains).map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Extract only emails from text
-    ///
-    /// @param text - Input text to search
-    /// @returns Array of extracted email addresses
-    #[wasm_bindgen(js_name = extractEmails)]
-    pub fn extract_emails(&self, text: &str) -> Result<JsValue, JsError> {
-        let matches = self.inner.extract_from_chunk(text.as_bytes());
-        let emails: Vec<ExtractedEntity> = matches
-            .iter()
-            .filter(|m| matches!(m.item, ExtractedItem::Email(_)))
-            .map(|m| ExtractedEntity {
-                entity_type: "Email".to_string(),
-                value: m.as_str(text.as_bytes()).to_string(),
-                start: m.span.0,
-                end: m.span.1,
-            })
-            .collect();
-
-        serde_wasm_bindgen::to_value(&emails).map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Extract only hashes from text
-    ///
-    /// @param text - Input text to search
-    /// @returns Array of extracted hashes (MD5, SHA1, SHA256, etc.)
-    #[wasm_bindgen(js_name = extractHashes)]
-    pub fn extract_hashes(&self, text: &str) -> Result<JsValue, JsError> {
-        let matches = self.inner.extract_from_chunk(text.as_bytes());
-        let hashes: Vec<ExtractedEntity> = matches
-            .iter()
-            .filter(|m| matches!(m.item, ExtractedItem::Hash(_, _)))
-            .map(|m| {
-                let entity_type = match &m.item {
-                    ExtractedItem::Hash(hash_type, _) => match hash_type {
-                        HashType::Md5 => "MD5",
-                        HashType::Sha1 => "SHA1",
-                        HashType::Sha256 => "SHA256",
-                        HashType::Sha384 => "SHA384",
-                        HashType::Sha512 => "SHA512",
-                    },
-                    _ => unreachable!(),
-                };
-                ExtractedEntity {
-                    entity_type: entity_type.to_string(),
-                    value: m.as_str(text.as_bytes()).to_string(),
-                    start: m.span.0,
-                    end: m.span.1,
-                }
-            })
-            .collect();
-
-        serde_wasm_bindgen::to_value(&hashes).map_err(|e| JsError::new(&e.to_string()))
-    }
-}
-
-impl Default for Extractor {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default Extractor")
     }
 }
 
@@ -624,9 +663,29 @@ mod tests {
     fn test_extractor() {
         use super::*;
 
-        let extractor = Extractor::new().unwrap();
+        let extractor = ExtractorBuilder::new().build().unwrap();
         let result = extractor.extract("Check 1.2.3.4 and evil.com").unwrap();
         // Result should be a JS array, we just verify it doesn't error
+        assert!(!result.is_null());
+    }
+
+    #[wasm_bindgen_test]
+    fn test_extractor_builder_selective() {
+        use super::*;
+
+        // Build extractor that only extracts IPs
+        let ip_extractor = ExtractorBuilder::new()
+            .extract_domains(false)
+            .extract_emails(false)
+            .extract_hashes(false)
+            .extract_bitcoin(false)
+            .extract_ethereum(false)
+            .extract_monero(false)
+            .build()
+            .unwrap();
+
+        let result = ip_extractor.extract("Check 1.2.3.4 and evil.com").unwrap();
+        // Should only find IP, not domain
         assert!(!result.is_null());
     }
 }

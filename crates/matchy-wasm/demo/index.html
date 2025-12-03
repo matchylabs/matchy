@@ -484,7 +484,7 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
     <script type="module">
         // Import from locally built wasm-pack output
         // For production, this would be: import init, { ... } from 'matchy-wasm';
-        import init, { Database, DatabaseBuilder, Extractor, version } from './pkg/matchy_wasm.js';
+        import init, { Database, DatabaseBuilder, ExtractorBuilder, version } from './pkg/matchy_wasm.js';
         
         let db = null;
         let extractor = null;
@@ -495,7 +495,7 @@ Bitcoin address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa</textarea>
                 await init();
                 console.log('Matchy WASM loaded, version:', version());
                 
-                extractor = new Extractor();
+                extractor = new ExtractorBuilder().build();
                 
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('app').style.display = 'block';

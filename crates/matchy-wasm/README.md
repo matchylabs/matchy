@@ -6,7 +6,7 @@ WebAssembly bindings for [matchy](https://github.com/matchylabs/matchy) - fast I
 
 - **Database**: Load and query matchy databases from `Uint8Array`
 - **DatabaseBuilder**: Create databases with IPs, domains, and glob patterns
-- **Extractor**: Extract IPs, domains, emails, and hashes from text
+- **ExtractorBuilder**: Configure and build extractors for IPs, domains, emails, hashes, and crypto addresses
 
 ## Installation
 
@@ -25,7 +25,7 @@ wasm-pack build crates/matchy-wasm --target web
 ### JavaScript/TypeScript
 
 ```javascript
-import init, { Database, DatabaseBuilder, Extractor } from 'matchy-wasm';
+import init, { Database, DatabaseBuilder, ExtractorBuilder } from 'matchy-wasm';
 
 async function main() {
   // Initialize the WASM module
@@ -51,8 +51,8 @@ async function main() {
   const patternResult = db.lookup("malware.evil.com");
   console.log(patternResult); // { category: "malware" }
   
-  // Extract entities from text
-  const extractor = new Extractor();
+  // Extract entities from text (all types enabled by default)
+  const extractor = new ExtractorBuilder().build();
   const entities = extractor.extract(
     "Contact admin@example.com, check 192.168.1.1 and malware.evil.com"
   );
@@ -78,22 +78,33 @@ const db = new Database(bytes);
 const result = db.lookup("suspicious.domain.com");
 ```
 
-### Selective Extraction
+### Selective Extraction (Efficient)
+
+Configure extractors to only extract what you need - this is more efficient than extracting everything:
 
 ```javascript
-const extractor = new Extractor();
-
-// Extract only IPs
-const ips = extractor.extractIps("Server 10.0.0.1 and 8.8.8.8");
+// Extract only IPs (skips domain/email/hash extraction work)
+const ipExtractor = new ExtractorBuilder()
+    .extractDomains(false)
+    .extractEmails(false)
+    .extractHashes(false)
+    .extractBitcoin(false)
+    .extractEthereum(false)
+    .extractMonero(false)
+    .build();
+const ips = ipExtractor.extract("Server 10.0.0.1 and 8.8.8.8");
 
 // Extract only domains
-const domains = extractor.extractDomains("Visit example.com or test.org");
-
-// Extract only emails
-const emails = extractor.extractEmails("Contact alice@example.com");
-
-// Extract only hashes (MD5, SHA1, SHA256, etc.)
-const hashes = extractor.extractHashes("Hash: d41d8cd98f00b204e9800998ecf8427e");
+const domainExtractor = new ExtractorBuilder()
+    .extractIpv4(false)
+    .extractIpv6(false)
+    .extractEmails(false)
+    .extractHashes(false)
+    .extractBitcoin(false)
+    .extractEthereum(false)
+    .extractMonero(false)
+    .build();
+const domains = domainExtractor.extract("Visit example.com or test.org");
 ```
 
 ## API Reference
@@ -123,20 +134,29 @@ class DatabaseBuilder {
 }
 ```
 
-### `Extractor`
+### `ExtractorBuilder`
 
 ```typescript
+class ExtractorBuilder {
+  constructor();  // All extractors enabled by default
+  extractDomains(enable: boolean): ExtractorBuilder;
+  extractEmails(enable: boolean): ExtractorBuilder;
+  extractIpv4(enable: boolean): ExtractorBuilder;
+  extractIpv6(enable: boolean): ExtractorBuilder;
+  extractHashes(enable: boolean): ExtractorBuilder;
+  extractBitcoin(enable: boolean): ExtractorBuilder;
+  extractEthereum(enable: boolean): ExtractorBuilder;
+  extractMonero(enable: boolean): ExtractorBuilder;
+  minDomainLabels(min: number): ExtractorBuilder;
+  build(): Extractor;
+}
+
 class Extractor {
-  constructor();
   extract(text: string): ExtractedEntity[];
-  extractIps(text: string): ExtractedEntity[];
-  extractDomains(text: string): ExtractedEntity[];
-  extractEmails(text: string): ExtractedEntity[];
-  extractHashes(text: string): ExtractedEntity[];
 }
 
 interface ExtractedEntity {
-  type: "IPv4" | "IPv6" | "Domain" | "Email" | "MD5" | "SHA1" | "SHA256" | ...;
+  type: "IPv4" | "IPv6" | "Domain" | "Email" | "MD5" | "SHA1" | "SHA256" | "SHA384" | "SHA512" | "Bitcoin" | "Ethereum" | "Monero";
   value: string;
   start: number;
   end: number;
