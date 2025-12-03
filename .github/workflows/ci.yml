@@ -77,17 +77,17 @@ jobs:
         run: cargo run --example cache_demo
       
       - name: Build and run C API tests (Unix)
-        if: ${{ !contains(matrix.os, 'windows') }}
+        if: ${{ !contains(matrix.os, 'windows') && (github.event_name == 'push' || startsWith(github.head_ref, 'release/')) }}
         run: |
           cargo build --release -p matchy
           LD_LIBRARY_PATH=./target/release:$LD_LIBRARY_PATH make test-c test-c-ext test-mmdb
       
       - name: Setup MSVC (Windows)
-        if: ${{ contains(matrix.os, 'windows') }}
+        if: ${{ contains(matrix.os, 'windows') && (github.event_name == 'push' || startsWith(github.head_ref, 'release/')) }}
         uses: ilammy/msvc-dev-cmd@v1
       
       - name: Build and run C API tests (Windows)
-        if: ${{ contains(matrix.os, 'windows') }}
+        if: ${{ contains(matrix.os, 'windows') && (github.event_name == 'push' || startsWith(github.head_ref, 'release/')) }}
         shell: cmd
         run: |
           cargo build --release -p matchy
