@@ -39,37 +39,37 @@ jobs:
     needs: [preflight]
     strategy:
       matrix:
-        os: [namespace-profile-linux-amd64, namespace-profile-linux-arm64, namespace-profile-macos-26-1, windows-latest]
+        os: [namespace-profile-linux-amd64, namespace-profile-linux-arm64, namespace-profile-macos-26-1, namespace-profile-windows-amd64]
     steps:
       # Namespace runners: use cached checkout
       - name: Checkout (Namespace)
-        if: ${{ !contains(matrix.os, 'windows') }}
+        #if: ${{ !contains(matrix.os, 'windows') }}
         uses: namespacelabs/nscloud-checkout-action@v8
       
       # Windows: use standard checkout
-      - name: Checkout (Windows)
-        if: ${{ contains(matrix.os, 'windows') }}
-        uses: actions/checkout@v6
+      #- name: Checkout (Windows)
+      #  if: ${{ contains(matrix.os, 'windows') }}
+      #  uses: actions/checkout@v6
       
       # Namespace runners: use composite action
       - name: Setup Rust (Namespace)
-        if: ${{ !contains(matrix.os, 'windows') }}
+        #if: ${{ !contains(matrix.os, 'windows') }}
         uses: ./.github/actions/setup-rust
       
       # Windows: fall back to GitHub Actions cache + manual setup
-      - name: Cache cargo (Windows)
-        if: ${{ contains(matrix.os, 'windows') }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      #- name: Cache cargo (Windows)
+      #  if: ${{ contains(matrix.os, 'windows') }}
+      #  uses: actions/cache@v4
+      #  with:
+      #    path: |
+      #      ~/.cargo/registry
+      #      ~/.cargo/git
+      #      target
+      #    key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       
-      - name: Install Rust (Windows)
-        if: ${{ contains(matrix.os, 'windows') }}
-        uses: dtolnay/rust-toolchain@stable
+      #- name: Install Rust (Windows)
+      #  if: ${{ contains(matrix.os, 'windows') }}
+      #  uses: dtolnay/rust-toolchain@stable
       
       - name: Build
         run: cargo build --verbose
