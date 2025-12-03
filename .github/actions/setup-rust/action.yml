@@ -23,6 +23,7 @@ runs:
           target
           ~/.cargo/registry
           ~/.cargo/git
+          ~/.rustup
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
