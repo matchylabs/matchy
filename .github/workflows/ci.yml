@@ -92,6 +92,7 @@ jobs:
         run: |
           cargo build --release -p matchy
           if not exist C:\Temp mkdir C:\Temp
+          copy target\release\matchy.dll .
           cl /nologo /W3 /I crates\matchy\include crates\matchy\tests\test_c_api.c /Fe:test_c_api.exe /link /LIBPATH:target\release matchy.dll.lib
           test_c_api.exe
           cl /nologo /W3 /I crates\matchy\include crates\matchy\tests\test_c_api_extensions.c /Fe:test_c_api_ext.exe /link /LIBPATH:target\release matchy.dll.lib
