@@ -15,13 +15,13 @@
 
 **Fast IoC matching against logs, network traffic, and security data.**
 
-Stop using `grep -f` with massive indicator lists. Matchy turns your threat intelligence into a database that matches IPs, domains, file hashes, and patterns in microseconds—not minutes.
+Matchy builds memory-mapped databases from threat intelligence feeds, enabling fast lookups of IPs, domains, file hashes, and glob patterns.
 
 ```bash
 # Build a threat database from your intel feeds
 matchy build threats.csv -o threats.mxy
 
-# Scan your logs for matches (JSON output, ~450 MB/s)
+# Scan your logs for matches (multi-threaded)
 matchy match threats.mxy access.log
 
 # Query individual indicators
@@ -30,19 +30,14 @@ matchy query threats.mxy 1.2.3.4
 
 ## What It's For
 
-**Threat Intelligence Matching**: You have threat feeds (IPs, domains, file hashes) and need to search for them in your data. SIEM lookups are slow or complicated. Command-line tools like `grep -f` take forever with 100K+ indicators.
+**Threat Intelligence Matching**: You have threat feeds (IPs, domains, file hashes) and need to search for them in your data.
 
 **Use Cases**:
-- Scan logs for known-bad IPs, domains, or C2 infrastructure
-- Match file hashes from malware feeds against endpoint logs
+- Scan logs for known-bad IPs, domains, hashes, or C2 infrastructure
+- Enrich logs with threat context before sending to SIEM or storage
 - Real-time lookups in scripts and pipelines
 - Offline analysis when SIEM access is limited
-- Pre-filtering before sending to expensive SIEM queries
-
-**Better Than**:
-- `grep -f` - Matchy loads in <1ms vs minutes, queries in microseconds vs seconds
-- SIEM lookups - Run locally, no query costs, instant results
-- Custom scripts - One tool handles IPs, CIDRs, domains, globs, and hashes
+- Pre-filtering before expensive SIEM queries
 
 ## Key Features
 
@@ -97,10 +92,6 @@ matchy match threats.mxy /var/log/nginx/access.log
 
 # With statistics
 matchy match threats.mxy access.log --stats
-# JSON matches to stdout, stats to stderr:
-# [INFO] Lines processed: 523,441
-# [INFO] Matches found: 127 (0.02%)
-# [INFO] Throughput: 450 MB/s
 
 # Scan gzip logs (automatic decompression)
 matchy match threats.mxy access.log.gz
@@ -159,28 +150,10 @@ MaxMind-compatible API also available. See **[The Matchy Book](https://matchylab
 - **[API Reference](https://docs.rs/matchy)** - Rust library documentation  
 - **[DEVELOPMENT.md](DEVELOPMENT.md)** - Architecture and performance details
 
-## Workspace Structure
-
-Matchy is organized as a Cargo workspace with focused, reusable crates:
-
-- **matchy** - Main crate with CLI, Database API, C FFI
-- **matchy-format** - Unified .mxy file format (orchestrates all components)
-- **matchy-paraglob** - Glob pattern matching engine
-- **matchy-literal-hash** - O(1) exact string matching
-- **matchy-ip-trie** - IP address/CIDR routing
-- **matchy-ac** - Aho-Corasick automaton
-- **matchy-glob** - Glob pattern parser and matcher
-- **matchy-data-format** - MMDB data encoding/decoding
-- **matchy-extractor** - IoC extraction from unstructured text
-- **matchy-match-mode** - Shared case-sensitivity enum
-
-Each crate has its own README with usage examples and architecture details.
-
 ## Project Info
 
 **License**: Apache-2.0
-**Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)  
-**Status**: Production-ready, 242 tests passing
+**Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md)
 
-Matchy extends MaxMind's MMDB format with [Paraglob](https://github.com/zeek/paraglob) glob matching, creating a unified IoC database that's fast enough for real-time lookups and memory-efficient enough to scale to hundreds of worker processes.
+Matchy extends MaxMind's MMDB format with [Paraglob](https://github.com/zeek/paraglob)-style glob matching and literal string matching, creating a unified IoC database format.
 
