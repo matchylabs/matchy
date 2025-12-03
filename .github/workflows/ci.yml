@@ -82,6 +82,10 @@ jobs:
           cargo build --release -p matchy
           LD_LIBRARY_PATH=./target/release:$LD_LIBRARY_PATH make test-c test-c-ext test-mmdb
       
+      - name: Setup MSVC (Windows)
+        if: ${{ contains(matrix.os, 'windows') }}
+        uses: ilammy/msvc-dev-cmd@v1
+      
       - name: Build and run C API tests (Windows)
         if: ${{ contains(matrix.os, 'windows') }}
         shell: cmd
