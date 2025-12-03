@@ -179,7 +179,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -218,4 +218,14 @@ jobs:
         with:
           name: matchy-wasm-npm
           path: crates/matchy-wasm/pkg-npm/
+          retention-days: 7
+
+      - name: Build WASI (for fluent-bit-matchy compatibility)
+        run: cargo build -p matchy --target wasm32-wasip1 --release --no-default-features
+
+      - name: Upload WASI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchy-wasi
+          path: target/wasm32-wasip1/release/matchy.wasm
           retention-days: 7
