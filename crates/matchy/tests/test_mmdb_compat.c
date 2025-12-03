@@ -5,9 +5,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <arpa/inet.h>
 
+// sockaddr test only available on Unix (uses arpa/inet.h)
+#ifndef _WIN32
+#include <arpa/inet.h>
+#define HAS_SOCKADDR_TEST 1
+#else
+#define HAS_SOCKADDR_TEST 0
+#endif
+
+#ifdef _WIN32
+#define TEST_DB_PATH "C:\\Temp\\matchy_mmdb_test.db"
+#else
 #define TEST_DB_PATH "/tmp/matchy_mmdb_test.db"
+#endif
 #define GEOLITE_DB_PATH "crates/matchy/tests/data/GeoLite2-Country.mmdb"
 #define PASSED_COLOR "\033[32m"
 #define FAILED_COLOR "\033[31m"
@@ -164,6 +175,7 @@ void test_mmdb_lookup_string_not_found() {
     END_TEST();
 }
 
+#if HAS_SOCKADDR_TEST
 void test_mmdb_lookup_sockaddr() {
     TEST("MMDB_lookup_sockaddr");
     
@@ -193,6 +205,7 @@ void test_mmdb_lookup_sockaddr() {
     MMDB_close(&mmdb);
     END_TEST();
 }
+#endif
 
 void test_mmdb_aget_value() {
     TEST("MMDB_aget_value - nested string");
@@ -524,7 +537,9 @@ int main() {
     test_mmdb_open_invalid();
     test_mmdb_lookup_string();
     test_mmdb_lookup_string_not_found();
+#if HAS_SOCKADDR_TEST
     test_mmdb_lookup_sockaddr();
+#endif
     test_mmdb_aget_value();
     test_mmdb_get_value();
     test_mmdb_get_value_nested();

@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#define TEMP_DB_PATH "C:\\Temp\\matchy_c_test.db"
+#else
+#define TEMP_DB_PATH "/tmp/matchy_c_test.db"
+#endif
+
 int main() {
     printf("=== Matchy C API Tests ===\n\n");
     
@@ -35,7 +41,7 @@ int main() {
     printf("✓ Pattern 3 added\n");
     
     // Build to temp file
-    const char* tmpfile = "/tmp/matchy_c_test.db";
+    const char* tmpfile = TEMP_DB_PATH;
     if (matchy_builder_save(builder, tmpfile) != MATCHY_SUCCESS) {
         fprintf(stderr, "Failed to save\n");
         return 1;

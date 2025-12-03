@@ -8,7 +8,11 @@
 #include <string.h>
 #include <assert.h>
 
+#ifdef _WIN32
+#define TEST_DB_PATH "C:\\Temp\\matchy_extensions_test.db"
+#else
 #define TEST_DB_PATH "/tmp/matchy_extensions_test.db"
+#endif
 #define PASSED_COLOR "\033[32m"
 #define FAILED_COLOR "\033[31m"
 #define RESET_COLOR "\033[0m"

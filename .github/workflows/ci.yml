@@ -76,11 +76,24 @@ jobs:
       - name: Run examples
         run: cargo run --example cache_demo
       
-      - name: Build and run C API tests (non-Windows)
+      - name: Build and run C API tests (Unix)
         if: ${{ !contains(matrix.os, 'windows') }}
         run: |
           cargo build --release -p matchy
-          make test-c test-c-ext test-mmdb
+          LD_LIBRARY_PATH=./target/release:$LD_LIBRARY_PATH make test-c test-c-ext test-mmdb
+      
+      - name: Build and run C API tests (Windows)
+        if: ${{ contains(matrix.os, 'windows') }}
+        shell: cmd
+        run: |
+          cargo build --release -p matchy
+          if not exist C:\Temp mkdir C:\Temp
+          cl /nologo /W3 /I crates\matchy\include crates\matchy\tests\test_c_api.c /Fe:test_c_api.exe /link /LIBPATH:target\release matchy.dll.lib
+          test_c_api.exe
+          cl /nologo /W3 /I crates\matchy\include crates\matchy\tests\test_c_api_extensions.c /Fe:test_c_api_ext.exe /link /LIBPATH:target\release matchy.dll.lib
+          test_c_api_ext.exe
+          cl /nologo /W3 /I crates\matchy\include crates\matchy\tests\test_mmdb_compat.c crates\matchy\src\c_api\mmdb_varargs.c /Fe:test_mmdb.exe /link /LIBPATH:target\release matchy.dll.lib
+          test_mmdb.exe
 
   docs:
     name: Documentation
