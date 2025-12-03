@@ -6,8 +6,8 @@ inputs:
     description: 'Rust toolchain version'
     default: 'stable'
   components:
-    description: 'Additional components (comma-separated)'
-    default: ''
+    description: 'Rust components (comma-separated)'
+    default: 'rustfmt, clippy'
   targets:
     description: 'Additional targets (comma-separated)'
     default: ''
