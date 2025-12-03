@@ -93,12 +93,8 @@ jobs:
       - name: Run integration tests explicitly
         run: cargo test --test integration_tests --verbose --features bench-internal
       
-      - name: Build release
-        run: cargo build --release --verbose
-      
       - name: Run examples (public API only)
-        run: |
-          cargo run --release --example cache_demo
+        run: cargo run --example cache_demo
 
   docs:
     name: Documentation
@@ -148,7 +144,7 @@ jobs:
         run: cargo install cargo-tarpaulin
       
       - name: Generate coverage (no bench features)
-        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml
+        run: cargo tarpaulin --verbose --workspace --timeout 120 --out xml --engine llvm
       
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -163,6 +159,14 @@ jobs:
     needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v5
+      
+      - name: Setup libvirt/QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients
+          sudo libvirtd -d
+          sleep 2
+          ls -la /var/run/libvirt/libvirt-sock
       
       - name: Test on FreeBSD
         uses: vmactions/freebsd-vm@v1
