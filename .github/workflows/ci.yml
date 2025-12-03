@@ -23,8 +23,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       
-      - name: Run clippy with dead code check
-        run: cargo clippy --lib --bins -- -D warnings -D dead_code
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test
@@ -67,11 +67,20 @@ jobs:
       - name: Build
         run: cargo build --verbose
       
-      - name: Run tests (lib/bins/tests only; skip doctests)
-        run: cargo test --verbose --lib --bins --tests
+      - name: Run tests
+        run: cargo test --workspace --verbose
       
-      - name: Run examples (public API only)
+      - name: Run doc tests
+        run: cargo test --workspace --doc
+      
+      - name: Run examples
         run: cargo run --example cache_demo
+      
+      - name: Build and run C API tests (non-Windows)
+        if: ${{ !contains(matrix.os, 'windows') }}
+        run: |
+          cargo build --release -p matchy
+          make test-c test-c-ext test-mmdb
 
   docs:
     name: Documentation
