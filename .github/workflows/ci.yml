@@ -17,8 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
       
@@ -43,26 +43,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       
-      - name: Install Rust
+      # Namespace runners: use composite action
+      - name: Setup Rust (Namespace)
+        if: ${{ !contains(matrix.os, 'windows') }}
+        uses: ./.github/actions/setup-rust
+      
+      # Windows: fall back to GitHub Actions cache + manual setup
+      - name: Cache cargo (Windows)
+        if: ${{ contains(matrix.os, 'windows') }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Install Rust (Windows)
+        if: ${{ contains(matrix.os, 'windows') }}
         uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry
-      
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target
       
       - name: Build
         run: cargo build --verbose
@@ -83,8 +82,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
       
       - name: Check documentation
         run: cargo doc --no-deps --document-private-items
@@ -120,8 +119,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
       
       - name: Install tarpaulin
         uses: taiki-e/install-action@cargo-tarpaulin
@@ -176,26 +175,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
         with:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-wasm-
 
       - name: Build WASM (debug check)
         run: cargo build -p matchy-wasm --target wasm32-unknown-unknown
