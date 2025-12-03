@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -115,6 +115,8 @@ jobs:
 
   coverage:
     name: Code Coverage
+    # Only run on main branch pushes or release PRs (expensive job)
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/'))
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
@@ -159,6 +161,8 @@ jobs:
 
   security:
     name: Security Audit
+    # Only run on main branch pushes or release PRs
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/'))
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
@@ -171,6 +175,8 @@ jobs:
 
   wasm:
     name: Check WASM
+    # Only run on main branch pushes or release PRs
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/'))
     runs-on: namespace-profile-linux-amd64
     needs: [preflight]
     steps:
