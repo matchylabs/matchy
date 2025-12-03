@@ -25,13 +25,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       
-      - name: Run clippy (library and bins only, no bench features)
-        run: cargo clippy --lib --bins -- -D warnings
-
-      - name: Dead code check (fail on dead_code)
-        run: cargo check --lib --bins
-        env:
-          RUSTFLAGS: -Ddead_code
+      - name: Run clippy with dead code check
+        run: cargo clippy --lib --bins -- -D warnings -D dead_code
 
   test:
     name: Test
