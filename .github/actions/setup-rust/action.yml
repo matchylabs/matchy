@@ -25,11 +25,7 @@ runs:
       uses: namespacelabs/nscloud-cache-action@v1
       with:
         cache: rust
-        path: |
-          target
-          ~/.cargo/registry
-          ~/.cargo/git
-          ~/.rustup
+        path: ~/.rustup
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
