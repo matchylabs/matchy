@@ -155,20 +155,10 @@ jobs:
 
   freebsd:
     name: FreeBSD Test
-    runs-on: namespace-profile-linux-amd64
+    runs-on: ubuntu-latest  # Needs full VM support, not available on namespace runners
     needs: [fmt, clippy]
     steps:
       - uses: actions/checkout@v5
-      
-      - name: Setup libvirt/QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients
-          sudo libvirtd -d
-          sleep 2
-          sudo virsh net-start default
-          sudo virsh net-autostart default
-          ls -la /var/run/libvirt/libvirt-sock
       
       - name: Test on FreeBSD
         uses: vmactions/freebsd-vm@v1
