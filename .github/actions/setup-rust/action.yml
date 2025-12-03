@@ -15,6 +15,12 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # Namespace runners come with rustup bootstrapped (but no toolchain installed).
+    # Remove it so the cache action can mount our cached ~/.rustup without warnings.
+    - name: Remove pre-existing rustup
+      shell: bash
+      run: rm -rf ~/.rustup
+
     - name: Set up Rust cache
       uses: namespacelabs/nscloud-cache-action@v1
       with:
@@ -23,6 +29,7 @@ runs:
           target
           ~/.cargo/registry
           ~/.cargo/git
+          ~/.rustup
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@master
