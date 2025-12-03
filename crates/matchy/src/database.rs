@@ -1354,7 +1354,6 @@ impl Database {
         // Default to case-sensitive for backward compatibility with old databases
         MatchMode::CaseSensitive
     }
-
 }
 
 /// Database error type
@@ -1502,5 +1501,4 @@ mod tests {
             "Domain should not match in IP-only database"
         );
     }
-
 }

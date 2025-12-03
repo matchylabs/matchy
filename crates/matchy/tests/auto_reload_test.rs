@@ -56,7 +56,10 @@ fn test_auto_reload_basic() {
             break;
         }
     }
-    assert!(reloaded, "Database should have reloaded (generation should have increased)");
+    assert!(
+        reloaded,
+        "Database should have reloaded (generation should have increased)"
+    );
 
     // Query should now find updated value
     let result = db.lookup("1.2.3.4").unwrap();

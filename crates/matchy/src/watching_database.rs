@@ -107,9 +107,6 @@ pub struct WatchingDatabase {
     /// Generation counter - incremented on each reload to invalidate caches
     generation: Arc<AtomicU64>,
 
-    /// Optional callback for reload notifications
-    reload_callback: Option<ReloadCallback>,
-
     /// Watcher state (kept alive to maintain file watching)
     _watcher: WatcherState,
 }
@@ -241,10 +238,11 @@ impl WatchingDatabaseOpener {
         // manages cache invalidation at a higher level via generation counting.
         // The Database's cache is keyed by cache_generation which is 0 for all
         // new instances, leading to stale cache hits after reload.
-        let mut db_options = DatabaseOptions::default();
-        db_options.path = self.path.clone();
-        // Always disable cache on underlying Database when using WatchingDatabase
-        db_options.cache_capacity = Some(0);
+        let db_options = DatabaseOptions {
+            path: self.path.clone(),
+            cache_capacity: Some(0), // Always disable cache for WatchingDatabase
+            ..Default::default()
+        };
 
         // Create channels for watcher thread
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
@@ -349,7 +347,6 @@ impl WatchingDatabaseOpener {
         Ok(WatchingDatabase {
             current,
             generation,
-            reload_callback: self.reload_callback,
             _watcher: WatcherState {
                 _watcher: watcher,
                 _thread: WatcherThread {
@@ -364,7 +361,7 @@ impl WatchingDatabaseOpener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DatabaseBuilder, DataValue, MatchMode};
+    use crate::{DataValue, DatabaseBuilder, MatchMode};
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Mutex;
@@ -378,7 +375,10 @@ mod tests {
         // Create initial database
         let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
         let mut data = HashMap::new();
-        data.insert("value".to_string(), DataValue::String("initial".to_string()));
+        data.insert(
+            "value".to_string(),
+            DataValue::String("initial".to_string()),
+        );
         builder.add_literal("test.com", data).unwrap();
         let bytes = builder.build().unwrap();
         fs::write(&db_path, bytes).unwrap();
