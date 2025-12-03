@@ -15,7 +15,7 @@ jobs:
     name: Formatting
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -29,7 +29,7 @@ jobs:
     name: Clippy
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +59,7 @@ jobs:
           - os: windows-latest
             rust: beta
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -100,7 +100,7 @@ jobs:
     name: Documentation
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -114,7 +114,7 @@ jobs:
     name: Benchmarks
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -135,7 +135,7 @@ jobs:
     name: Code Coverage
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -158,7 +158,7 @@ jobs:
     runs-on: ubuntu-latest  # Needs full VM support, not available on namespace runners
     needs: [fmt, clippy]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Test on FreeBSD
         uses: vmactions/freebsd-vm@v1
@@ -178,7 +178,7 @@ jobs:
     name: Security Audit
     runs-on: namespace-profile-linux-amd64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       
       - name: Run security audit
         uses: rustsec/audit-check@v2
@@ -190,7 +190,7 @@ jobs:
     runs-on: namespace-profile-linux-amd64
     needs: [fmt, clippy]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
