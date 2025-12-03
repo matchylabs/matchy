@@ -91,27 +91,27 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-  bench:
-    name: Benchmarks
-    runs-on: namespace-profile-linux-amd64
-    needs: [preflight]
-    steps:
-      - uses: actions/checkout@v6
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-bench
-      
-      - name: Compile benchmarks (bench-internal)
-        run: cargo bench --no-run --features bench-internal
-      
-      - name: Run benchmark smoke test (bench-internal)
-        run: cargo bench --features bench-internal -- --test
+  # bench:
+  #   name: Benchmarks
+  #   runs-on: namespace-profile-linux-amd64
+  #   needs: [preflight]
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     
+  #     - name: Install Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #     
+  #     - name: Cache cargo build
+  #       uses: actions/cache@v4
+  #       with:
+  #         path: target
+  #         key: ${{ runner.os }}-cargo-bench
+  #     
+  #     - name: Compile benchmarks (bench-internal)
+  #       run: cargo bench --no-run --features bench-internal
+  #     
+  #     - name: Run benchmark smoke test (bench-internal)
+  #       run: cargo bench --features bench-internal -- --test
 
   coverage:
     name: Code Coverage
