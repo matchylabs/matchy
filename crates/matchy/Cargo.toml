@@ -126,7 +126,7 @@ winapi = { version = "0.3", features = ["winsock2", "ws2def", "ws2ipdef"] }
 
 [dev-dependencies]
 # Testing dependencies
-criterion = "0.7"
+criterion = "0.8"
 proptest = "1.9"
 tempfile = "3.8"
 rand = "0.9"
