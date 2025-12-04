@@ -703,6 +703,32 @@ impl Database {
         if let Some(Some(result)) = self.with_cache(|cache| cache.get(query).cloned()) {
             self.stats.total_queries.fetch_add(1, Ordering::Relaxed);
             self.stats.cache_hits.fetch_add(1, Ordering::Relaxed);
+            // Track query type and match status for cache hits too
+            match &result {
+                QueryResult::Ip { .. } => {
+                    self.stats.ip_queries.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .queries_with_match
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                QueryResult::Pattern { .. } => {
+                    self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .queries_with_match
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                QueryResult::NotFound => {
+                    // Determine query type from the query string itself
+                    if query.parse::<IpAddr>().is_ok() {
+                        self.stats.ip_queries.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        self.stats.string_queries.fetch_add(1, Ordering::Relaxed);
+                    }
+                    self.stats
+                        .queries_without_match
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            }
             return Ok(Some(result));
         }
 
