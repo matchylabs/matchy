@@ -27,16 +27,26 @@ use memmap2::Mmap;
 #[cfg(not(target_family = "wasm"))]
 use std::fs::File;
 
-// Thread-local query cache with generation tracking
-// Each thread gets its own LRU cache for zero-contention queries
-// Generation counter is checked to invalidate cache on database reload
-type QueryCache = (
-    u64,
-    LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>,
-);
+// Per-database query cache type
+// Each database has its own cache, stored as thread-local for lock-free access
+type QueryCacheInner = LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>;
 
+// Thread-local cache storage keyed by database generation ID.
+// This allows multiple databases to coexist in the same thread without
+// cache collisions, while still providing lock-free per-thread access.
 thread_local! {
-    static QUERY_CACHE: RefCell<Option<QueryCache>> = const { RefCell::new(None) };
+    static QUERY_CACHES: RefCell<rustc_hash::FxHashMap<u64, QueryCacheInner>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Global counter for generating unique cache generation IDs.
+/// Each Database instance gets a unique ID to prevent cache collisions
+/// between different databases.
+static NEXT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Generate a unique cache generation ID for a new database instance
+fn next_cache_generation() -> u64 {
+    NEXT_CACHE_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Statistics for database queries and cache performance
@@ -362,41 +372,34 @@ unsafe impl Send for Database {}
 unsafe impl Sync for Database {}
 
 impl Database {
-    /// Helper: Access thread-local cache, initializing if needed
+    /// Helper: Access thread-local cache for this database, initializing if needed
+    ///
+    /// Each database instance has its own cache (keyed by cache_generation),
+    /// stored per-thread for lock-free access. This allows multiple databases
+    /// to coexist in the same thread without cache collisions.
     #[inline]
     fn with_cache<F, R>(&self, f: F) -> Option<R>
     where
-        F: FnOnce(
-            &mut LruCache<String, QueryResult, BuildHasherDefault<rustc_hash::FxHasher>>,
-        ) -> R,
+        F: FnOnce(&mut QueryCacheInner) -> R,
     {
         if !self.cache_enabled {
             return None;
         }
 
-        QUERY_CACHE.with(|cache| {
-            let mut cache_borrow = cache.borrow_mut();
+        QUERY_CACHES.with(|caches| {
+            let mut caches_borrow = caches.borrow_mut();
 
-            // Check if cache needs initialization
-            let needs_init = match *cache_borrow {
-                None => true,
-                Some((gen, _)) if gen != self.cache_generation => true,
-                _ => false,
-            };
-
-            if needs_init {
-                // Initialize cache with current generation
-                *cache_borrow = Some((
-                    self.cache_generation,
+            // Get or create the cache for this specific database
+            let cache = caches_borrow
+                .entry(self.cache_generation)
+                .or_insert_with(|| {
                     LruCache::with_hasher(
                         NonZeroUsize::new(self.cache_capacity).unwrap(),
                         BuildHasherDefault::<rustc_hash::FxHasher>::default(),
-                    ),
-                ));
-            }
+                    )
+                });
 
-            // Access the cache (guaranteed to be Some after initialization)
-            Some(f(&mut cache_borrow.as_mut().unwrap().1))
+            Some(f(cache))
         })
     }
 
@@ -475,9 +478,9 @@ impl Database {
     /// ```
     pub fn clear_cache(&self) {
         if self.cache_enabled {
-            QUERY_CACHE.with(|cache| {
-                if let Some((_, c)) = cache.borrow_mut().as_mut() {
-                    c.clear();
+            QUERY_CACHES.with(|caches| {
+                if let Some(cache) = caches.borrow_mut().get_mut(&self.cache_generation) {
+                    cache.clear();
                 }
             });
         }
@@ -485,7 +488,8 @@ impl Database {
 
     /// Get current thread-local cache size (number of entries)
     ///
-    /// Returns the number of query results currently cached in this thread.
+    /// Returns the number of query results currently cached in this thread
+    /// for this specific database.
     /// Useful for monitoring cache usage.
     ///
     /// # Examples
@@ -504,7 +508,12 @@ impl Database {
         if !self.cache_enabled {
             return 0;
         }
-        QUERY_CACHE.with(|cache| cache.borrow().as_ref().map_or(0, |(_, c)| c.len()))
+        QUERY_CACHES.with(|caches| {
+            caches
+                .borrow()
+                .get(&self.cache_generation)
+                .map_or(0, |c| c.len())
+        })
     }
 
     /// Get database statistics snapshot
@@ -634,7 +643,7 @@ impl Database {
             cache_capacity: DEFAULT_QUERY_CACHE_SIZE,
             cache_enabled: true, // Default: cache enabled
             stats: Arc::new(DatabaseStats::default()),
-            cache_generation: 0,
+            cache_generation: next_cache_generation(),
         };
 
         // Now we can safely get 'static reference since db owns the data
