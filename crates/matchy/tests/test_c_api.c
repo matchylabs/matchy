@@ -191,6 +191,52 @@ int main() {
     }
     printf("✓ NULL path rejected\n");
     
+    // Test 6: matchy_query_into (FFI-friendly variant)
+    printf("\n--- Testing matchy_query_into API ---\n");
+    
+    matchy_t* db6 = matchy_open(tmpfile);
+    if (db6 == NULL) {
+        fprintf(stderr, "Failed to open database for query_into test\n");
+        return 1;
+    }
+    
+    // Test query_into with matching result
+    matchy_result_t result_into;
+    matchy_query_into(db6, "test_file.txt", &result_into);
+    if (!result_into.found) {
+        fprintf(stderr, "query_into did not find match\n");
+        return 1;
+    }
+    printf("✓ query_into found match\n");
+    matchy_free_result(&result_into);
+    
+    // Test query_into with non-matching query
+    matchy_query_into(db6, "no_match.xyz", &result_into);
+    if (result_into.found) {
+        fprintf(stderr, "query_into incorrectly found match\n");
+        return 1;
+    }
+    printf("✓ query_into correctly returned not found\n");
+    
+    // Test equivalence between query and query_into
+    matchy_result_t result_a = matchy_query(db6, "test_file.txt");
+    matchy_result_t result_b;
+    matchy_query_into(db6, "test_file.txt", &result_b);
+    
+    if (result_a.found != result_b.found) {
+        fprintf(stderr, "query and query_into returned different found values\n");
+        return 1;
+    }
+    if (result_a.prefix_len != result_b.prefix_len) {
+        fprintf(stderr, "query and query_into returned different prefix_len values\n");
+        return 1;
+    }
+    printf("✓ query and query_into are equivalent\n");
+    
+    matchy_free_result(&result_a);
+    matchy_free_result(&result_b);
+    matchy_close(db6);
+    
     printf("\n=== All C API tests passed! ===\n");
     return 0;
 }

@@ -55,8 +55,12 @@
 //! matchy_t *db = matchy_open("threats.mxy");
 //! if (db == NULL) { /* handle error */ }
 //!
-//! // 7. Query database  
+//! // 7. Query database
+//! // Option A: Return by value (standard C)
 //! matchy_result_t result = matchy_query(db, "1.2.3.4");
+//! // Option B: Write into pointer (FFI-friendly for Java JNA, etc.)
+//! // matchy_result_t result;
+//! // matchy_query_into(db, "1.2.3.4", &result);
 //! if (result.found) {
 //!     // Option A: Get data as JSON string
 //!     char *json = matchy_result_to_json(&result);

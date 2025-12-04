@@ -135,6 +135,14 @@ matchy_result_t result = matchy_query(db, "192.0.2.1");
 The database is memory-mapped for instant loading. Check `result.found` to see if
 a match was found.
 
+> **Note**: For FFI systems that have issues with return-by-value structs (like some
+> Java JNA configurations on ARM64), use `matchy_query_into()` instead:
+> ```c
+> matchy_result_t result;
+> matchy_query_into(db, "192.0.2.1", &result);
+> ```
+> Both functions are equivalent; `matchy_query_into()` writes to a pointer you provide.
+
 ### 5. Cleanup
 
 ```c

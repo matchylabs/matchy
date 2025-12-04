@@ -74,7 +74,8 @@ The C API is organized into these groups:
 - `matchy_init_open_options()` - Initialize option structure
 - `matchy_open()` - Open database (skip validation)
 - `matchy_close()` - Close database
-- `matchy_query()` - Query database
+- `matchy_query()` - Query database (returns by value)
+- `matchy_query_into()` - Query database (writes to pointer, FFI-friendly)
 - `matchy_get_stats()` - Get database statistics
 - `matchy_clear_cache()` - Clear query cache
 

@@ -753,6 +753,34 @@ void matchy_close(struct matchy_t *db);
 struct matchy_result_t matchy_query(const struct matchy_t *db, const char *query);
 
 /*
+ Unified query interface - writes result into provided struct pointer
+
+ Same as matchy_query but writes to a provided pointer instead of returning by value.
+ This is more FFI-friendly for some languages/platforms (like Java JNA on ARM64).
+
+ # Parameters
+ * `db` - Database handle (must not be NULL)
+ * `query` - IP address or pattern to search (null-terminated C string, must not be NULL)
+ * `result` - Pointer to result struct to fill (must not be NULL)
+
+ # Safety
+ * `db` must be a valid pointer from matchy_open
+ * `query` must be a valid null-terminated C string
+ * `result` must be a valid pointer to a matchy_result_t
+
+ # Example
+ ```c
+ matchy_result_t result;
+ matchy_query_into(db, "1.2.3.4", &result);
+ if (result.found) {
+     // Use result...
+ }
+ matchy_free_result(&result);
+ ```
+ */
+void matchy_query_into(const struct matchy_t *db, const char *query, struct matchy_result_t *result);
+
+/*
  Free query result
 
  Frees the memory allocated for a query result.
