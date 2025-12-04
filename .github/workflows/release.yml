@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      skip_publish:
+        description: 'Skip publishing to crates.io (manual builds only)'
+        required: false
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -71,6 +78,33 @@ jobs:
           7z a ${{ matrix.asset_name }}.zip ${{ matrix.bin_name }}
           mv ${{ matrix.asset_name }}.zip $env:GITHUB_WORKSPACE/
       
+      # Collect native library files for Java fat jar
+      - name: Collect native library (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p native-lib
+          cp target/${{ matrix.target }}/release/libmatchy.so native-lib/libmatchy-${{ matrix.target }}.so
+      
+      - name: Collect native library (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p native-lib
+          cp target/${{ matrix.target }}/release/libmatchy.dylib native-lib/libmatchy-${{ matrix.target }}.dylib
+      
+      - name: Collect native library (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p native-lib
+          cp target/${{ matrix.target }}/release/matchy.dll native-lib/matchy-${{ matrix.target }}.dll
+          cp target/${{ matrix.target }}/release/matchy.dll.lib native-lib/matchy-${{ matrix.target }}.dll.lib
+      
+      - name: Upload native library artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: native-lib-${{ matrix.target }}
+          path: native-lib/*
+          if-no-files-found: error
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
@@ -120,9 +154,42 @@ jobs:
           path: target/wasm32-wasip1/release/matchy.wasm
           if-no-files-found: error
 
+  bundle-native-libs:
+    name: Bundle Native Libraries
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all native library artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: native-lib-*
+          path: native-libs-temp
+      
+      - name: Consolidate native libraries
+        run: |
+          mkdir -p native-libs
+          find native-libs-temp -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' -o -name '*.lib' \) -exec cp {} native-libs/ \;
+          ls -lh native-libs/
+      
+      - name: Create native libraries tarball
+        run: |
+          cd native-libs
+          tar czf ../matchy-native-libs.tar.gz *
+          cd ..
+          sha256sum matchy-native-libs.tar.gz > matchy-native-libs.tar.gz.sha256
+      
+      - name: Upload consolidated native libraries
+        uses: actions/upload-artifact@v5
+        with:
+          name: matchy-native-libs-bundle
+          path: |
+            matchy-native-libs.tar.gz
+            matchy-native-libs.tar.gz.sha256
+          if-no-files-found: error
+
   create-release:
     name: Create GitHub Release
-    needs: [build-release, build-wasm]
+    needs: [build-release, build-wasm, bundle-native-libs]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -145,6 +212,7 @@ jobs:
   publish-crates-io:
     name: Publish to crates.io
     needs: build-release
+    if: github.event_name == 'push' || !inputs.skip_publish
     runs-on: ubuntu-latest
     environment: release  # Uses the release environment we just created
     permissions:
