@@ -1990,3 +1990,331 @@ pub unsafe extern "C" fn matchy_validate(
         }
     }
 }
+
+// ============================================================================
+// EXTRACTOR API
+// ============================================================================
+
+use crate::extractor::{ExtractedItem, Extractor, ExtractorBuilder, HashType};
+
+// Extraction flags (bitmask)
+/// Extract domain names (e.g., "example.com")
+pub const MATCHY_EXTRACT_DOMAINS: u32 = 1 << 0;
+/// Extract email addresses (e.g., "user@example.com")
+pub const MATCHY_EXTRACT_EMAILS: u32 = 1 << 1;
+/// Extract IPv4 addresses
+pub const MATCHY_EXTRACT_IPV4: u32 = 1 << 2;
+/// Extract IPv6 addresses
+pub const MATCHY_EXTRACT_IPV6: u32 = 1 << 3;
+/// Extract file hashes (MD5, SHA1, SHA256, SHA384, SHA512)
+pub const MATCHY_EXTRACT_HASHES: u32 = 1 << 4;
+/// Extract Bitcoin addresses
+pub const MATCHY_EXTRACT_BITCOIN: u32 = 1 << 5;
+/// Extract Ethereum addresses
+pub const MATCHY_EXTRACT_ETHEREUM: u32 = 1 << 6;
+/// Extract Monero addresses
+pub const MATCHY_EXTRACT_MONERO: u32 = 1 << 7;
+/// Extract all supported types
+pub const MATCHY_EXTRACT_ALL: u32 = 0xFF;
+
+// Item type constants (returned in match results)
+/// Domain name
+pub const MATCHY_ITEM_TYPE_DOMAIN: u8 = 0;
+/// Email address
+pub const MATCHY_ITEM_TYPE_EMAIL: u8 = 1;
+/// IPv4 address
+pub const MATCHY_ITEM_TYPE_IPV4: u8 = 2;
+/// IPv6 address
+pub const MATCHY_ITEM_TYPE_IPV6: u8 = 3;
+/// MD5 hash (32 hex characters)
+pub const MATCHY_ITEM_TYPE_MD5: u8 = 4;
+/// SHA1 hash (40 hex characters)
+pub const MATCHY_ITEM_TYPE_SHA1: u8 = 5;
+/// SHA256 hash (64 hex characters)
+pub const MATCHY_ITEM_TYPE_SHA256: u8 = 6;
+/// SHA384 hash (96 hex characters)
+pub const MATCHY_ITEM_TYPE_SHA384: u8 = 7;
+/// SHA512 hash (128 hex characters)
+pub const MATCHY_ITEM_TYPE_SHA512: u8 = 8;
+/// Bitcoin address
+pub const MATCHY_ITEM_TYPE_BITCOIN: u8 = 9;
+/// Ethereum address
+pub const MATCHY_ITEM_TYPE_ETHEREUM: u8 = 10;
+/// Monero address
+pub const MATCHY_ITEM_TYPE_MONERO: u8 = 11;
+
+/// Opaque extractor handle
+#[repr(C)]
+pub struct matchy_extractor_t {
+    _private: [u8; 0],
+}
+
+/// A single extracted match
+#[repr(C)]
+pub struct matchy_match_t {
+    /// Item type (one of MATCHY_ITEM_TYPE_* constants)
+    pub item_type: u8,
+    /// The extracted value as a null-terminated string
+    /// Valid for the lifetime of the matchy_matches_t
+    pub value: *const c_char,
+    /// Byte offset where the match starts in the input
+    pub start: usize,
+    /// Byte offset where the match ends in the input (exclusive)
+    pub end: usize,
+}
+
+/// Array of extracted matches
+#[repr(C)]
+pub struct matchy_matches_t {
+    /// Pointer to array of matches
+    pub items: *const matchy_match_t,
+    /// Number of matches
+    pub count: usize,
+    /// Internal pointer (do not use)
+    _internal: *mut c_void,
+}
+
+// Internal storage for matches (keeps strings alive)
+struct MatchesInternal {
+    matches: Vec<matchy_match_t>,
+    #[allow(dead_code)] // Kept to extend CString lifetimes for FFI pointers
+    strings: Vec<CString>,
+}
+
+impl matchy_extractor_t {
+    fn from_internal(internal: Box<Extractor>) -> *mut Self {
+        Box::into_raw(internal) as *mut Self
+    }
+
+    unsafe fn to_internal(ptr: *mut Self) -> Box<Extractor> {
+        Box::from_raw(ptr as *mut Extractor)
+    }
+
+    unsafe fn as_internal(ptr: *const Self) -> &'static Extractor {
+        &*(ptr as *const Extractor)
+    }
+}
+
+/// Get item type constant from ExtractedItem
+fn item_type_from_extracted(item: &ExtractedItem) -> u8 {
+    match item {
+        ExtractedItem::Domain(_) => MATCHY_ITEM_TYPE_DOMAIN,
+        ExtractedItem::Email(_) => MATCHY_ITEM_TYPE_EMAIL,
+        ExtractedItem::Ipv4(_) => MATCHY_ITEM_TYPE_IPV4,
+        ExtractedItem::Ipv6(_) => MATCHY_ITEM_TYPE_IPV6,
+        ExtractedItem::Hash(HashType::Md5, _) => MATCHY_ITEM_TYPE_MD5,
+        ExtractedItem::Hash(HashType::Sha1, _) => MATCHY_ITEM_TYPE_SHA1,
+        ExtractedItem::Hash(HashType::Sha256, _) => MATCHY_ITEM_TYPE_SHA256,
+        ExtractedItem::Hash(HashType::Sha384, _) => MATCHY_ITEM_TYPE_SHA384,
+        ExtractedItem::Hash(HashType::Sha512, _) => MATCHY_ITEM_TYPE_SHA512,
+        ExtractedItem::Bitcoin(_) => MATCHY_ITEM_TYPE_BITCOIN,
+        ExtractedItem::Ethereum(_) => MATCHY_ITEM_TYPE_ETHEREUM,
+        ExtractedItem::Monero(_) => MATCHY_ITEM_TYPE_MONERO,
+    }
+}
+
+/// Create an extractor with specified extraction types
+///
+/// # Parameters
+/// * `flags` - Bitmask of MATCHY_EXTRACT_* flags specifying what to extract
+///
+/// # Returns
+/// * Non-null extractor handle on success
+/// * NULL on failure
+///
+/// # Example
+/// ```c
+/// // Extract everything
+/// matchy_extractor_t *ext = matchy_extractor_create(MATCHY_EXTRACT_ALL);
+///
+/// // Extract only domains and IPs
+/// matchy_extractor_t *ext = matchy_extractor_create(
+///     MATCHY_EXTRACT_DOMAINS | MATCHY_EXTRACT_IPV4 | MATCHY_EXTRACT_IPV6
+/// );
+/// ```
+#[no_mangle]
+pub extern "C" fn matchy_extractor_create(flags: u32) -> *mut matchy_extractor_t {
+    let builder = ExtractorBuilder::new()
+        .extract_domains((flags & MATCHY_EXTRACT_DOMAINS) != 0)
+        .extract_emails((flags & MATCHY_EXTRACT_EMAILS) != 0)
+        .extract_ipv4((flags & MATCHY_EXTRACT_IPV4) != 0)
+        .extract_ipv6((flags & MATCHY_EXTRACT_IPV6) != 0)
+        .extract_hashes((flags & MATCHY_EXTRACT_HASHES) != 0)
+        .extract_bitcoin((flags & MATCHY_EXTRACT_BITCOIN) != 0)
+        .extract_ethereum((flags & MATCHY_EXTRACT_ETHEREUM) != 0)
+        .extract_monero((flags & MATCHY_EXTRACT_MONERO) != 0);
+
+    match builder.build() {
+        Ok(extractor) => matchy_extractor_t::from_internal(Box::new(extractor)),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// Extract patterns from a chunk of data
+///
+/// Extracts all enabled pattern types (domains, IPs, emails, hashes, crypto)
+/// from the input data in a single pass.
+///
+/// # Parameters
+/// * `extractor` - Extractor handle (must not be NULL)
+/// * `data` - Input data buffer (must not be NULL)
+/// * `len` - Length of input data in bytes
+/// * `matches` - Output matches structure (must not be NULL)
+///
+/// # Returns
+/// * MATCHY_SUCCESS on success
+/// * MATCHY_ERROR_INVALID_PARAM if any parameter is NULL
+///
+/// # Memory Management
+/// Caller must free the matches with matchy_matches_free()
+///
+/// # Example
+/// ```c
+/// matchy_extractor_t *extractor = matchy_extractor_create(MATCHY_EXTRACT_ALL);
+/// const char *text = "Check evil.com and 192.168.1.1";
+/// matchy_matches_t matches;
+///
+/// if (matchy_extractor_extract_chunk(extractor, (const uint8_t *)text, strlen(text), &matches) == MATCHY_SUCCESS) {
+///     for (size_t i = 0; i < matches.count; i++) {
+///         printf("%s: %s\n",
+///                matchy_item_type_name(matches.items[i].item_type),
+///                matches.items[i].value);
+///     }
+///     matchy_matches_free(&matches);
+/// }
+/// matchy_extractor_free(extractor);
+/// ```
+///
+/// # Safety
+/// * `extractor` must be a valid pointer returned by `matchy_extractor_create`
+/// * `data` must point to a valid buffer of at least `len` bytes
+/// * `matches` must be a valid pointer to an uninitialized `matchy_matches_t`
+#[no_mangle]
+pub unsafe extern "C" fn matchy_extractor_extract_chunk(
+    extractor: *const matchy_extractor_t,
+    data: *const u8,
+    len: usize,
+    matches: *mut matchy_matches_t,
+) -> i32 {
+    if extractor.is_null() || data.is_null() || matches.is_null() {
+        return MATCHY_ERROR_INVALID_PARAM;
+    }
+
+    let ext = matchy_extractor_t::as_internal(extractor);
+    let chunk = slice::from_raw_parts(data, len);
+
+    // Extract matches
+    let rust_matches = ext.extract_from_chunk(chunk);
+
+    // Convert to C representation
+    let mut strings = Vec::with_capacity(rust_matches.len());
+    let mut c_matches = Vec::with_capacity(rust_matches.len());
+
+    for m in rust_matches {
+        let value_str = m.item.as_value();
+        let c_string = match CString::new(value_str) {
+            Ok(s) => s,
+            Err(_) => continue, // Skip invalid strings
+        };
+
+        c_matches.push(matchy_match_t {
+            item_type: item_type_from_extracted(&m.item),
+            value: c_string.as_ptr(),
+            start: m.span.0,
+            end: m.span.1,
+        });
+        strings.push(c_string);
+    }
+
+    // Store internal data and populate output
+    let internal = Box::new(MatchesInternal {
+        matches: c_matches,
+        strings,
+    });
+
+    (*matches).items = internal.matches.as_ptr();
+    (*matches).count = internal.matches.len();
+    (*matches)._internal = Box::into_raw(internal) as *mut c_void;
+
+    MATCHY_SUCCESS
+}
+
+/// Free the matches returned by matchy_extractor_extract_chunk
+///
+/// # Parameters
+/// * `matches` - Matches structure to free (must not be NULL)
+///
+/// # Safety
+/// * Must not use the matches after calling this function
+#[no_mangle]
+pub unsafe extern "C" fn matchy_matches_free(matches: *mut matchy_matches_t) {
+    if matches.is_null() {
+        return;
+    }
+
+    if !(*matches)._internal.is_null() {
+        let _ = Box::from_raw((*matches)._internal as *mut MatchesInternal);
+        (*matches)._internal = ptr::null_mut();
+        (*matches).items = ptr::null();
+        (*matches).count = 0;
+    }
+}
+
+/// Free the extractor
+///
+/// # Parameters
+/// * `extractor` - Extractor handle (may be NULL)
+///
+/// # Safety
+/// * Must not be used after calling this function
+#[no_mangle]
+pub unsafe extern "C" fn matchy_extractor_free(extractor: *mut matchy_extractor_t) {
+    if !extractor.is_null() {
+        let _ = matchy_extractor_t::to_internal(extractor);
+    }
+}
+
+/// Get the string name for an item type constant
+///
+/// # Parameters
+/// * `item_type` - One of the MATCHY_ITEM_TYPE_* constants
+///
+/// # Returns
+/// * Static string like "Domain", "Email", "IPv4", etc.
+/// * "Unknown" for invalid type values
+///
+/// # Note
+/// The returned string is static and must not be freed.
+#[no_mangle]
+pub extern "C" fn matchy_item_type_name(item_type: u8) -> *const c_char {
+    static DOMAIN: &[u8] = b"Domain\0";
+    static EMAIL: &[u8] = b"Email\0";
+    static IPV4: &[u8] = b"IPv4\0";
+    static IPV6: &[u8] = b"IPv6\0";
+    static MD5: &[u8] = b"MD5\0";
+    static SHA1: &[u8] = b"SHA1\0";
+    static SHA256: &[u8] = b"SHA256\0";
+    static SHA384: &[u8] = b"SHA384\0";
+    static SHA512: &[u8] = b"SHA512\0";
+    static BITCOIN: &[u8] = b"Bitcoin\0";
+    static ETHEREUM: &[u8] = b"Ethereum\0";
+    static MONERO: &[u8] = b"Monero\0";
+    static UNKNOWN: &[u8] = b"Unknown\0";
+
+    let name = match item_type {
+        MATCHY_ITEM_TYPE_DOMAIN => DOMAIN,
+        MATCHY_ITEM_TYPE_EMAIL => EMAIL,
+        MATCHY_ITEM_TYPE_IPV4 => IPV4,
+        MATCHY_ITEM_TYPE_IPV6 => IPV6,
+        MATCHY_ITEM_TYPE_MD5 => MD5,
+        MATCHY_ITEM_TYPE_SHA1 => SHA1,
+        MATCHY_ITEM_TYPE_SHA256 => SHA256,
+        MATCHY_ITEM_TYPE_SHA384 => SHA384,
+        MATCHY_ITEM_TYPE_SHA512 => SHA512,
+        MATCHY_ITEM_TYPE_BITCOIN => BITCOIN,
+        MATCHY_ITEM_TYPE_ETHEREUM => ETHEREUM,
+        MATCHY_ITEM_TYPE_MONERO => MONERO,
+        _ => UNKNOWN,
+    };
+    name.as_ptr() as *const c_char
+}

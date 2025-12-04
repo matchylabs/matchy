@@ -93,6 +93,13 @@ The C API is organized into these groups:
 - `matchy_result_pattern_count()` - Get pattern count
 - `matchy_result_free()` - Free result
 
+### Extractor Operations
+- `matchy_extractor_create()` - Create extractor with flags
+- `matchy_extractor_extract_chunk()` - Extract patterns from data
+- `matchy_extractor_free()` - Free extractor
+- `matchy_matches_free()` - Free match results
+- `matchy_item_type_name()` - Get type name string
+
 ## Error Handling Pattern
 
 All functions return error codes:
@@ -433,6 +440,131 @@ Compile with sanitizer:
 gcc -fsanitize=address -g -o myapp myapp.c -lmatchy
 ./myapp
 ```
+
+## Extractor API
+
+The extractor API provides high-performance pattern extraction from text data.
+
+### Extraction Flags
+
+Use these flags with `matchy_extractor_create()` to specify what to extract:
+
+```c
+MATCHY_EXTRACT_DOMAINS   // Domain names (e.g., "example.com")
+MATCHY_EXTRACT_EMAILS    // Email addresses
+MATCHY_EXTRACT_IPV4      // IPv4 addresses
+MATCHY_EXTRACT_IPV6      // IPv6 addresses
+MATCHY_EXTRACT_HASHES    // File hashes (MD5, SHA1, SHA256, SHA384, SHA512)
+MATCHY_EXTRACT_BITCOIN   // Bitcoin addresses
+MATCHY_EXTRACT_ETHEREUM  // Ethereum addresses
+MATCHY_EXTRACT_MONERO    // Monero addresses
+MATCHY_EXTRACT_ALL       // All of the above
+```
+
+### Item Types
+
+Match results include an item type:
+
+```c
+MATCHY_ITEM_TYPE_DOMAIN    // Domain name
+MATCHY_ITEM_TYPE_EMAIL     // Email address
+MATCHY_ITEM_TYPE_IPV4      // IPv4 address
+MATCHY_ITEM_TYPE_IPV6      // IPv6 address
+MATCHY_ITEM_TYPE_MD5       // MD5 hash
+MATCHY_ITEM_TYPE_SHA1      // SHA1 hash
+MATCHY_ITEM_TYPE_SHA256    // SHA256 hash
+MATCHY_ITEM_TYPE_SHA384    // SHA384 hash
+MATCHY_ITEM_TYPE_SHA512    // SHA512 hash
+MATCHY_ITEM_TYPE_BITCOIN   // Bitcoin address
+MATCHY_ITEM_TYPE_ETHEREUM  // Ethereum address
+MATCHY_ITEM_TYPE_MONERO    // Monero address
+```
+
+### Functions
+
+- `matchy_extractor_create(flags)` - Create extractor with specified flags
+- `matchy_extractor_extract_chunk(extractor, data, len, matches)` - Extract patterns
+- `matchy_extractor_free(extractor)` - Free extractor
+- `matchy_matches_free(matches)` - Free match results
+- `matchy_item_type_name(type)` - Get string name for item type
+
+### Example
+
+```c
+#include <matchy.h>
+#include <stdio.h>
+#include <string.h>
+
+int main() {
+    // Create extractor for domains and IPs only
+    matchy_extractor_t *ext = matchy_extractor_create(
+        MATCHY_EXTRACT_DOMAINS | MATCHY_EXTRACT_IPV4 | MATCHY_EXTRACT_IPV6
+    );
+    if (!ext) {
+        fprintf(stderr, "Failed to create extractor\n");
+        return 1;
+    }
+    
+    // Extract from text
+    const char *text = "Check evil.com and 192.168.1.1";
+    matchy_matches_t matches;
+    
+    int err = matchy_extractor_extract_chunk(
+        ext,
+        (const uint8_t *)text,
+        strlen(text),
+        &matches
+    );
+    
+    if (err != MATCHY_SUCCESS) {
+        fprintf(stderr, "Extraction failed: %d\n", err);
+        matchy_extractor_free(ext);
+        return 1;
+    }
+    
+    // Process results
+    for (size_t i = 0; i < matches.count; i++) {
+        printf("%s: %s (bytes %zu-%zu)\n",
+               matchy_item_type_name(matches.items[i].item_type),
+               matches.items[i].value,
+               matches.items[i].start,
+               matches.items[i].end);
+    }
+    
+    // Cleanup
+    matchy_matches_free(&matches);
+    matchy_extractor_free(ext);
+    return 0;
+}
+```
+
+Output:
+```
+Domain: evil.com (bytes 6-14)
+IPv4: 192.168.1.1 (bytes 19-30)
+```
+
+### Match Structure
+
+```c
+typedef struct matchy_match_t {
+    uint8_t item_type;      // MATCHY_ITEM_TYPE_* constant
+    const char *value;      // Extracted value (null-terminated)
+    size_t start;           // Start byte offset in input
+    size_t end;             // End byte offset (exclusive)
+} matchy_match_t;
+
+typedef struct matchy_matches_t {
+    const matchy_match_t *items;  // Array of matches
+    size_t count;                  // Number of matches
+} matchy_matches_t;
+```
+
+### Thread Safety
+
+- **Extractor handles** (`matchy_extractor_t*`) are thread-safe for concurrent extraction
+- Multiple threads can safely call `matchy_extractor_extract_chunk()` on the same extractor
+- Each thread should have its own `matchy_matches_t` for results
 
 ## See Also
 

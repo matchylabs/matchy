@@ -3,6 +3,7 @@
 #include "matchy/matchy.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #define TEMP_DB_PATH "C:\\Temp\\matchy_c_test.db"
@@ -236,6 +237,126 @@ int main() {
     matchy_free_result(&result_a);
     matchy_free_result(&result_b);
     matchy_close(db6);
+    
+    // Test 7: Extractor API
+    printf("\n--- Testing Extractor API ---\n");
+    
+    // Create extractor with all types
+    matchy_extractor_t *extractor = matchy_extractor_create(MATCHY_EXTRACT_ALL);
+    if (extractor == NULL) {
+        fprintf(stderr, "Failed to create extractor\n");
+        return 1;
+    }
+    printf("✓ Extractor created with MATCHY_EXTRACT_ALL\n");
+    
+    // Test extraction
+    const char *test_text = "Check evil.com and 192.168.1.1 or user@example.com";
+    matchy_matches_t matches;
+    
+    int extract_result = matchy_extractor_extract_chunk(
+        extractor, 
+        (const uint8_t *)test_text, 
+        strlen(test_text), 
+        &matches
+    );
+    
+    if (extract_result != MATCHY_SUCCESS) {
+        fprintf(stderr, "Extraction failed with code %d\n", extract_result);
+        return 1;
+    }
+    printf("✓ Extraction succeeded\n");
+    
+    // Should find domain, IPv4, and email
+    if (matches.count < 3) {
+        fprintf(stderr, "Expected at least 3 matches, got %zu\n", matches.count);
+        return 1;
+    }
+    printf("✓ Found %zu matches\n", matches.count);
+    
+    // Print all matches
+    int found_domain = 0, found_ipv4 = 0, found_email = 0;
+    for (size_t i = 0; i < matches.count; i++) {
+        const char *type_name = matchy_item_type_name(matches.items[i].item_type);
+        printf("  Match %zu: %s = \"%s\" (bytes %zu-%zu)\n", 
+               i, type_name, matches.items[i].value,
+               matches.items[i].start, matches.items[i].end);
+        
+        if (matches.items[i].item_type == MATCHY_ITEM_TYPE_DOMAIN) found_domain = 1;
+        if (matches.items[i].item_type == MATCHY_ITEM_TYPE_IPV4) found_ipv4 = 1;
+        if (matches.items[i].item_type == MATCHY_ITEM_TYPE_EMAIL) found_email = 1;
+    }
+    
+    if (!found_domain || !found_ipv4 || !found_email) {
+        fprintf(stderr, "Missing expected match types: domain=%d ipv4=%d email=%d\n",
+                found_domain, found_ipv4, found_email);
+        return 1;
+    }
+    printf("✓ Found all expected types (domain, IPv4, email)\n");
+    
+    matchy_matches_free(&matches);
+    matchy_extractor_free(extractor);
+    printf("✓ Extractor cleaned up\n");
+    
+    // Test selective extraction (domains only)
+    printf("\n--- Testing selective extraction ---\n");
+    
+    matchy_extractor_t *domain_only = matchy_extractor_create(MATCHY_EXTRACT_DOMAINS);
+    if (domain_only == NULL) {
+        fprintf(stderr, "Failed to create domain-only extractor\n");
+        return 1;
+    }
+    
+    extract_result = matchy_extractor_extract_chunk(
+        domain_only,
+        (const uint8_t *)test_text,
+        strlen(test_text),
+        &matches
+    );
+    
+    if (extract_result != MATCHY_SUCCESS) {
+        fprintf(stderr, "Domain-only extraction failed\n");
+        return 1;
+    }
+    
+    // Should only find domains, not IPs or emails
+    for (size_t i = 0; i < matches.count; i++) {
+        if (matches.items[i].item_type != MATCHY_ITEM_TYPE_DOMAIN) {
+            fprintf(stderr, "Found non-domain type %d in domain-only extraction\n",
+                    matches.items[i].item_type);
+            return 1;
+        }
+    }
+    printf("✓ Domain-only extraction works (found %zu domains)\n", matches.count);
+    
+    matchy_matches_free(&matches);
+    matchy_extractor_free(domain_only);
+    
+    // Test item_type_name for all types
+    printf("\n--- Testing matchy_item_type_name ---\n");
+    
+    const char *name;
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_DOMAIN);
+    if (strcmp(name, "Domain") != 0) { fprintf(stderr, "Bad name for DOMAIN\n"); return 1; }
+    
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_EMAIL);
+    if (strcmp(name, "Email") != 0) { fprintf(stderr, "Bad name for EMAIL\n"); return 1; }
+    
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_IPV4);
+    if (strcmp(name, "IPv4") != 0) { fprintf(stderr, "Bad name for IPV4\n"); return 1; }
+    
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_IPV6);
+    if (strcmp(name, "IPv6") != 0) { fprintf(stderr, "Bad name for IPV6\n"); return 1; }
+    
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_SHA256);
+    if (strcmp(name, "SHA256") != 0) { fprintf(stderr, "Bad name for SHA256\n"); return 1; }
+    
+    name = matchy_item_type_name(MATCHY_ITEM_TYPE_BITCOIN);
+    if (strcmp(name, "Bitcoin") != 0) { fprintf(stderr, "Bad name for BITCOIN\n"); return 1; }
+    
+    name = matchy_item_type_name(255);  // Invalid type
+    if (strcmp(name, "Unknown") != 0) { fprintf(stderr, "Bad name for invalid type\n"); return 1; }
+    
+    printf("✓ All type names correct\n");
     
     printf("\n=== All C API tests passed! ===\n");
     return 0;

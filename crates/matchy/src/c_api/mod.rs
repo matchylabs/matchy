@@ -85,6 +85,32 @@
 //! matchy_close(db);
 //! ```
 //!
+//! # Extractor API
+//!
+//! High-performance pattern extraction from text:
+//!
+//! ```c
+//! // Create extractor (bitmask of what to extract)
+//! matchy_extractor_t *ext = matchy_extractor_create(
+//!     MATCHY_EXTRACT_DOMAINS | MATCHY_EXTRACT_IPV4
+//! );
+//!
+//! // Extract from data
+//! matchy_matches_t matches;
+//! matchy_extractor_extract_chunk(ext, data, len, &matches);
+//!
+//! // Process results
+//! for (size_t i = 0; i < matches.count; i++) {
+//!     printf("%s: %s\n",
+//!            matchy_item_type_name(matches.items[i].item_type),
+//!            matches.items[i].value);
+//! }
+//!
+//! // Cleanup
+//! matchy_matches_free(&matches);
+//! matchy_extractor_free(ext);
+//! ```
+//!
 //! # Memory Management
 //!
 //! - **Builder**: Call `matchy_builder_free()` when done building
@@ -92,12 +118,15 @@
 //! - **Results**: Call `matchy_free_result()` after processing query results
 //! - **Strings**: Call `matchy_free_string()` for strings returned by matchy functions
 //! - **Data lists**: Call `matchy_free_entry_data_list()` for full data traversals
+//! - **Extractor**: Call `matchy_extractor_free()` when done extracting
+//! - **Matches**: Call `matchy_matches_free()` after processing extraction results
 //!
 //! # Thread Safety
 //!
 //! - **Database handles**: Safe for concurrent reads from multiple threads
+//! - **Extractor handles**: Safe for concurrent extraction from multiple threads
 //! - **Builders**: NOT thread-safe, use one builder per thread
-//! - **Results**: Thread-local, don't share between threads
+//! - **Results/Matches**: Thread-local, don't share between threads
 //!
 //! # Database Update Strategy
 //!

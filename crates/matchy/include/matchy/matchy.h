@@ -173,6 +173,111 @@ namespace matchy {
 #define MATCHY_VALIDATION_STRICT 1
 
 /*
+ Extract domain names (e.g., "example.com")
+ */
+#define MATCHY_EXTRACT_DOMAINS (1 << 0)
+
+/*
+ Extract email addresses (e.g., "user@example.com")
+ */
+#define MATCHY_EXTRACT_EMAILS (1 << 1)
+
+/*
+ Extract IPv4 addresses
+ */
+#define MATCHY_EXTRACT_IPV4 (1 << 2)
+
+/*
+ Extract IPv6 addresses
+ */
+#define MATCHY_EXTRACT_IPV6 (1 << 3)
+
+/*
+ Extract file hashes (MD5, SHA1, SHA256, SHA384, SHA512)
+ */
+#define MATCHY_EXTRACT_HASHES (1 << 4)
+
+/*
+ Extract Bitcoin addresses
+ */
+#define MATCHY_EXTRACT_BITCOIN (1 << 5)
+
+/*
+ Extract Ethereum addresses
+ */
+#define MATCHY_EXTRACT_ETHEREUM (1 << 6)
+
+/*
+ Extract Monero addresses
+ */
+#define MATCHY_EXTRACT_MONERO (1 << 7)
+
+/*
+ Extract all supported types
+ */
+#define MATCHY_EXTRACT_ALL 255
+
+/*
+ Domain name
+ */
+#define MATCHY_ITEM_TYPE_DOMAIN 0
+
+/*
+ Email address
+ */
+#define MATCHY_ITEM_TYPE_EMAIL 1
+
+/*
+ IPv4 address
+ */
+#define MATCHY_ITEM_TYPE_IPV4 2
+
+/*
+ IPv6 address
+ */
+#define MATCHY_ITEM_TYPE_IPV6 3
+
+/*
+ MD5 hash (32 hex characters)
+ */
+#define MATCHY_ITEM_TYPE_MD5 4
+
+/*
+ SHA1 hash (40 hex characters)
+ */
+#define MATCHY_ITEM_TYPE_SHA1 5
+
+/*
+ SHA256 hash (64 hex characters)
+ */
+#define MATCHY_ITEM_TYPE_SHA256 6
+
+/*
+ SHA384 hash (96 hex characters)
+ */
+#define MATCHY_ITEM_TYPE_SHA384 7
+
+/*
+ SHA512 hash (128 hex characters)
+ */
+#define MATCHY_ITEM_TYPE_SHA512 8
+
+/*
+ Bitcoin address
+ */
+#define MATCHY_ITEM_TYPE_BITCOIN 9
+
+/*
+ Ethereum address
+ */
+#define MATCHY_ITEM_TYPE_ETHEREUM 10
+
+/*
+ Monero address
+ */
+#define MATCHY_ITEM_TYPE_MONERO 11
+
+/*
  Opaque database builder handle
  */
 typedef struct matchy_builder_t {
@@ -391,6 +496,54 @@ typedef struct matchy_entry_data_list_t {
    */
   struct matchy_entry_data_list_t *next;
 } matchy_entry_data_list_t;
+
+/*
+ Opaque extractor handle
+ */
+typedef struct matchy_extractor_t {
+  uint8_t _private[0];
+} matchy_extractor_t;
+
+/*
+ A single extracted match
+ */
+typedef struct matchy_match_t {
+  /*
+   Item type (one of MATCHY_ITEM_TYPE_* constants)
+   */
+  uint8_t item_type;
+  /*
+   The extracted value as a null-terminated string
+   Valid for the lifetime of the matchy_matches_t
+   */
+  const char *value;
+  /*
+   Byte offset where the match starts in the input
+   */
+  uintptr_t start;
+  /*
+   Byte offset where the match ends in the input (exclusive)
+   */
+  uintptr_t end;
+} matchy_match_t;
+
+/*
+ Array of extracted matches
+ */
+typedef struct matchy_matches_t {
+  /*
+   Pointer to array of matches
+   */
+  const struct matchy_match_t *items;
+  /*
+   Number of matches
+   */
+  uintptr_t count;
+  /*
+   Internal pointer (do not use)
+   */
+  void *_internal;
+} matchy_matches_t;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1128,6 +1281,109 @@ char *matchy_result_to_json(const struct matchy_result_t *result);
  ```
  */
 int32_t matchy_validate(const char *filename, int32_t level, char **error_message);
+
+/*
+ Create an extractor with specified extraction types
+
+ # Parameters
+ * `flags` - Bitmask of MATCHY_EXTRACT_* flags specifying what to extract
+
+ # Returns
+ * Non-null extractor handle on success
+ * NULL on failure
+
+ # Example
+ ```c
+ // Extract everything
+ matchy_extractor_t *ext = matchy_extractor_create(MATCHY_EXTRACT_ALL);
+
+ // Extract only domains and IPs
+ matchy_extractor_t *ext = matchy_extractor_create(
+     MATCHY_EXTRACT_DOMAINS | MATCHY_EXTRACT_IPV4 | MATCHY_EXTRACT_IPV6
+ );
+ ```
+ */
+struct matchy_extractor_t *matchy_extractor_create(uint32_t flags);
+
+/*
+ Extract patterns from a chunk of data
+
+ Extracts all enabled pattern types (domains, IPs, emails, hashes, crypto)
+ from the input data in a single pass.
+
+ # Parameters
+ * `extractor` - Extractor handle (must not be NULL)
+ * `data` - Input data buffer (must not be NULL)
+ * `len` - Length of input data in bytes
+ * `matches` - Output matches structure (must not be NULL)
+
+ # Returns
+ * MATCHY_SUCCESS on success
+ * MATCHY_ERROR_INVALID_PARAM if any parameter is NULL
+
+ # Memory Management
+ Caller must free the matches with matchy_matches_free()
+
+ # Example
+ ```c
+ matchy_extractor_t *extractor = matchy_extractor_create(MATCHY_EXTRACT_ALL);
+ const char *text = "Check evil.com and 192.168.1.1";
+ matchy_matches_t matches;
+
+ if (matchy_extractor_extract_chunk(extractor, (const uint8_t *)text, strlen(text), &matches) == MATCHY_SUCCESS) {
+     for (size_t i = 0; i < matches.count; i++) {
+         printf("%s: %s\n",
+                matchy_item_type_name(matches.items[i].item_type),
+                matches.items[i].value);
+     }
+     matchy_matches_free(&matches);
+ }
+ matchy_extractor_free(extractor);
+ ```
+
+ # Safety
+ * `extractor` must be a valid pointer returned by `matchy_extractor_create`
+ * `data` must point to a valid buffer of at least `len` bytes
+ * `matches` must be a valid pointer to an uninitialized `matchy_matches_t`
+ */
+int32_t matchy_extractor_extract_chunk(const struct matchy_extractor_t *extractor, const uint8_t *data, uintptr_t len, struct matchy_matches_t *matches);
+
+/*
+ Free the matches returned by matchy_extractor_extract_chunk
+
+ # Parameters
+ * `matches` - Matches structure to free (must not be NULL)
+
+ # Safety
+ * Must not use the matches after calling this function
+ */
+void matchy_matches_free(struct matchy_matches_t *matches);
+
+/*
+ Free the extractor
+
+ # Parameters
+ * `extractor` - Extractor handle (may be NULL)
+
+ # Safety
+ * Must not be used after calling this function
+ */
+void matchy_extractor_free(struct matchy_extractor_t *extractor);
+
+/*
+ Get the string name for an item type constant
+
+ # Parameters
+ * `item_type` - One of the MATCHY_ITEM_TYPE_* constants
+
+ # Returns
+ * Static string like "Domain", "Email", "IPv4", etc.
+ * "Unknown" for invalid type values
+
+ # Note
+ The returned string is static and must not be freed.
+ */
+const char *matchy_item_type_name(uint8_t item_type);
 
 #ifdef __cplusplus
 }  // extern "C"
