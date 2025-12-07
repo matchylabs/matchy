@@ -234,13 +234,12 @@ impl WatchingDatabaseOpener {
         use std::sync::mpsc::RecvTimeoutError;
 
         // Build options for opening database
-        // Note: We disable the Database's internal cache because WatchingDatabase
-        // manages cache invalidation at a higher level via generation counting.
-        // The Database's cache is keyed by cache_generation which is 0 for all
-        // new instances, leading to stale cache hits after reload.
+        // Use default cache capacity and get a unique cache generation from the global counter
+        let initial_gen = crate::database::next_cache_generation();
         let db_options = DatabaseOptions {
             path: self.path.clone(),
-            cache_capacity: Some(0), // Always disable cache for WatchingDatabase
+            cache_capacity: self.cache_capacity, // Use configured cache capacity
+            cache_generation: Some(initial_gen),
             ..Default::default()
         };
 
@@ -266,8 +265,8 @@ impl WatchingDatabaseOpener {
         let initial_db = Database::open_with_options(db_options.clone())?;
         let current = Arc::new(ArcSwap::from_pointee(initial_db));
 
-        // Generation counter starts at 1 (0 is reserved for non-watched databases)
-        let generation = Arc::new(AtomicU64::new(1));
+        // Generation counter starts at the initial generation from global counter
+        let generation = Arc::new(AtomicU64::new(initial_gen));
 
         // Clone for thread
         let thread_current = Arc::clone(&current);
@@ -299,18 +298,26 @@ impl WatchingDatabaseOpener {
                         // Check if file is stable (no events for DEBOUNCE_MS)
                         if let Some(last_time) = last_event_time {
                             if last_time.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
+                                // Get a new unique generation from the global counter
+                                let new_gen = crate::database::next_cache_generation();
+                                thread_generation.store(new_gen, Ordering::Release);
+
+                                // Create new options with updated cache generation
+                                let mut reload_options = thread_options.clone();
+                                reload_options.cache_generation = Some(new_gen);
+
                                 // Attempt reload
-                                let reload_result =
-                                    Database::open_with_options(thread_options.clone());
+                                let reload_result = Database::open_with_options(reload_options);
 
                                 match reload_result {
                                     Ok(new_db) => {
-                                        // Increment generation
-                                        thread_generation.fetch_add(1, Ordering::Release);
-                                        let new_gen = thread_generation.load(Ordering::Acquire);
-
                                         // Atomically swap in new database
                                         thread_current.store(Arc::new(new_db));
+
+                                        // Clear old generation cache entries to prevent stale hits
+                                        crate::database::Database::clear_cache_generation(
+                                            new_gen - 1,
+                                        );
 
                                         // Invoke callback
                                         if let Some(ref callback) = thread_callback {
@@ -389,7 +396,7 @@ mod tests {
         // Verify initial lookup works
         let result = db.lookup("test.com").unwrap();
         assert!(result.is_some());
-        assert_eq!(db.generation(), 1);
+        assert!(db.generation() > 0, "Generation should be positive");
     }
 
     #[test]
@@ -416,7 +423,7 @@ mod tests {
             .open()
             .unwrap();
 
-        assert_eq!(db.generation(), 1);
+        assert!(db.generation() > 0, "Generation should be positive");
 
         // Modify database (atomic rename)
         std::thread::sleep(Duration::from_millis(100));

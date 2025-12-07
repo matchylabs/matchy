@@ -45,7 +45,7 @@ thread_local! {
 static NEXT_CACHE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a unique cache generation ID for a new database instance
-fn next_cache_generation() -> u64 {
+pub(crate) fn next_cache_generation() -> u64 {
     NEXT_CACHE_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -243,6 +243,9 @@ pub struct DatabaseOptions {
 
     /// Optional in-memory bytes (for from_bytes builder)
     pub bytes: Option<Vec<u8>>,
+
+    /// Optional cache generation (for WatchingDatabase to prevent stale cache hits)
+    pub cache_generation: Option<u64>,
 }
 
 /// Builder for opening databases with custom configuration
@@ -486,6 +489,13 @@ impl Database {
         }
     }
 
+    /// Clear cache entries for a specific generation (used by WatchingDatabase)
+    pub fn clear_cache_generation(generation: u64) {
+        QUERY_CACHES.with(|caches| {
+            caches.borrow_mut().remove(&generation);
+        });
+    }
+
     /// Get current thread-local cache size (number of entries)
     ///
     /// Returns the number of query results currently cached in this thread
@@ -597,6 +607,11 @@ impl Database {
                 db.cache_capacity = capacity;
                 db.cache_enabled = true;
             }
+        }
+
+        // Set cache generation if provided (for WatchingDatabase)
+        if let Some(generation) = options.cache_generation {
+            db.cache_generation = generation;
         }
 
         Ok(db)
