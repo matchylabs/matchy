@@ -19,6 +19,7 @@ Validation checks include:
 - **UTF-8 validity**: All strings are valid UTF-8
 - **Graph integrity**: No cycles in the failure function
 - **Data consistency**: Arrays, maps, and pointers are valid
+- **Schema validation**: If `database_type` matches a known schema (e.g., `ThreatDB-v1`), yield values are validated against it
 
 The validator is designed to detect malformed, corrupted, or potentially malicious databases without panicking or causing undefined behavior.
 
@@ -286,7 +287,8 @@ Validation loads the entire file into memory. For databases larger than availabl
 
 ## See Also
 
-- [matchy build](cli-build.md) - Build databases
-- [matchy inspect](cli-inspect.md) - Inspect database structure
-- [Validation API](validation-api.md) - Programmatic validation
-- [Binary Format](binary-format.md) - Format specification
+- [matchy build](matchy-build.md) - Build databases
+- [matchy inspect](matchy-inspect.md) - Inspect database structure
+- [Validation API](../reference/validation-api.md) - Programmatic validation
+- [Schemas Reference](../reference/schemas.md) - Schema validation details
+- [Binary Format](../reference/binary-format.md) - Format specification

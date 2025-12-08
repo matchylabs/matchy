@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use matchy::schema_validation::SchemaValidator;
+use matchy::schemas::{get_schema_info, is_known_database_type};
 use matchy::{DataValue, DatabaseBuilder, MatchMode};
 use std::collections::HashMap;
 use std::fs;
@@ -9,6 +11,21 @@ use std::path::PathBuf;
 use std::os::unix::fs::PermissionsExt;
 
 use crate::cli_utils::json_to_data_map;
+
+/// Helper to validate data against a schema and format errors nicely
+fn validate_entry(
+    validator: &SchemaValidator,
+    key: &str,
+    data: &HashMap<String, DataValue>,
+) -> Result<()> {
+    validator.validate(data).map_err(|e| {
+        anyhow::anyhow!(
+            "Schema validation failed for entry \"{}\"\n\n{}\n\nUse a custom --database-type name if you don't want schema validation.",
+            key,
+            e
+        )
+    })
+}
 
 /// Set file permissions to read-only (0444 on Unix, read-only attribute on Windows)
 fn set_readonly(path: &PathBuf) -> Result<()> {
@@ -72,10 +89,30 @@ pub fn cmd_build(
 
     let mut builder = DatabaseBuilder::new(match_mode);
 
-    // Apply metadata if provided
-    if let Some(db_type) = database_type {
-        builder = builder.with_database_type(db_type);
-    }
+    // Check if database_type is a known schema type (enables validation)
+    let validator: Option<SchemaValidator> = if let Some(ref db_type) = database_type {
+        if is_known_database_type(db_type) {
+            // Known schema type - enable validation and use canonical database_type
+            let info = get_schema_info(db_type).unwrap(); // Safe: we just checked is_known
+            let validator = SchemaValidator::new(db_type)
+                .with_context(|| format!("Failed to load schema for '{}'", db_type))?;
+
+            // Use the canonical database_type (e.g., "ThreatDB-v1" instead of "threatdb")
+            builder = builder.with_database_type(info.database_type);
+
+            if verbose || debug {
+                println!("Schema validation: enabled ({})", info.database_type);
+            }
+
+            Some(validator)
+        } else {
+            // Custom database type - no validation, just set metadata
+            builder = builder.with_database_type(db_type.clone());
+            None
+        }
+    } else {
+        None
+    };
 
     if let Some(desc) = description {
         builder = builder.with_description(desc_lang, desc);
@@ -132,8 +169,13 @@ pub fn cmd_build(
                     let line = line?;
                     let entry = line.trim();
                     if !entry.is_empty() && !entry.starts_with('#') {
+                        let data = HashMap::new();
+                        // Validate if schema is active
+                        if let Some(ref v) = validator {
+                            validate_entry(v, entry, &data)?;
+                        }
                         // Auto-detection: builder will determine if it's IP or pattern
-                        builder.add_entry(entry, HashMap::new())?;
+                        builder.add_entry(entry, data)?;
                         count += 1;
                         total_count += 1;
                         if debug && total_count % 1000 == 0 {
@@ -219,6 +261,11 @@ pub fn cmd_build(
                         }
                     }
 
+                    // Validate if schema is active
+                    if let Some(ref v) = validator {
+                        validate_entry(v, entry, &data)?;
+                    }
+
                     builder.add_entry(entry, data)?;
                     total_entries += 1;
 
@@ -262,6 +309,11 @@ pub fn cmd_build(
                     } else {
                         HashMap::new()
                     };
+
+                    // Validate if schema is active
+                    if let Some(ref v) = validator {
+                        validate_entry(v, key, &data)?;
+                    }
 
                     builder.add_entry(key, data)?;
                     total_entries += 1;

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ThreatDB Schema v1",
+  "description": "Schema for threat intelligence yield values in Matchy databases. Designed for MISP/STIX compatibility while remaining minimal and practical.",
+  "type": "object",
+  "properties": {
+    "threat_level": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "unknown"],
+      "description": "Severity/priority of the threat indicator. Maps to MISP threat levels (high=1, medium=2, low=3, unknown=4) with 'critical' added for compatibility with common feed conventions."
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Type of threat. Use lowercase values. Common categories align with MISP taxonomies and threat intel feeds.",
+      "examples": [
+        "malware",
+        "c2",
+        "phishing",
+        "botnet",
+        "ransomware",
+        "spam",
+        "scanner",
+        "proxy",
+        "cryptomining",
+        "dropper",
+        "apt",
+        "tor-exit",
+        "vpn",
+        "bruteforce",
+        "exploit",
+        "rat",
+        "stealer",
+        "ddos"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Origin feed or organization that reported this indicator. Examples: 'abuse.ch', 'alienvault', 'emergingthreats', 'internal'."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Confidence score (0-100). Compatible with STIX 2.1 confidence scale and mappable to Admiralty credibility scale. Higher values indicate greater certainty."
+    },
+    "first_seen": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the indicator was first observed (ISO 8601 format). Used for indicator aging/decay calculations."
+    },
+    "last_seen": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the indicator was last observed (ISO 8601 format). Used for indicator freshness assessment."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable context, notes, or additional details about the indicator."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional list of tags for additional classification. Can include MISP taxonomy tags, malware families, campaign names, etc.",
+      "examples": [
+        ["emotet", "banking-trojan"],
+        ["apt29", "cozy-bear", "nation-state"],
+        ["mirai-variant", "iot"]
+      ]
+    },
+    "reference": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL to external reference, report, or documentation about this indicator."
+    },
+    "tlp": {
+      "type": "string",
+      "enum": ["clear", "green", "amber", "amber+strict", "red"],
+      "description": "Traffic Light Protocol marking for information sharing. See https://www.cisa.gov/tlp for definitions. 'clear' = TLP:CLEAR (formerly WHITE), unrestricted. 'green' = community-wide. 'amber' = limited distribution. 'amber+strict' = organization only. 'red' = named recipients only."
+    },
+    "indicator_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Type of indicator (what kind of data the key represents). Useful for provenance and processing. Common values from MISP: 'ip-src', 'ip-dst', 'domain', 'hostname', 'url', 'md5', 'sha1', 'sha256', 'email', 'filename'. Can also use simplified types: 'ip', 'cidr', 'hash', etc.",
+      "examples": [
+        "ip-src",
+        "ip-dst",
+        "ip",
+        "cidr",
+        "domain",
+        "hostname",
+        "url",
+        "md5",
+        "sha1",
+        "sha256",
+        "hash",
+        "email",
+        "filename"
+      ]
+    }
+  },
+  "required": ["threat_level", "category", "source"],
+  "additionalProperties": true
+}

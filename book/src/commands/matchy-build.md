@@ -40,6 +40,21 @@ format is detected from file extension.
 $ matchy build data.txt --format csv -o output.mxy
 ```
 
+### `-t, --database-type <NAME>`
+
+Set the database type in metadata. If you use a known schema name (e.g., `threatdb`),
+yield values are validated against the schema during build.
+
+```console
+# Enable ThreatDB schema validation
+$ matchy build threats.csv -o threats.mxy --database-type threatdb
+
+# Custom type (no validation)
+$ matchy build data.csv -o data.mxy --database-type "MyCompany-Intel"
+```
+
+See [Schemas Reference](../reference/schemas.md) for available schemas and validation details.
+
 ## Examples
 
 ### Build from CSV

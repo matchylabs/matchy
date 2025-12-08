@@ -319,16 +319,21 @@ impl Default for PointerValidationResult {
 /// # Arguments
 /// * `data_section` - Raw data section bytes
 /// * `offset` - Offset within data section to start validation
-/// * `visited` - Set of already-visited offsets (for cycle detection)
+/// * `path` - Set of offsets in the current traversal path (for cycle detection)
 /// * `depth` - Current depth in pointer chain
 ///
 /// # Returns
 /// * `Ok(max_depth)` - Maximum depth reached
 /// * `Err` - Validation error encountered
+///
+/// # Note
+/// The `path` set tracks ancestors in the current traversal path, not all visited nodes.
+/// This allows legitimate pointer reuse (data deduplication) while still detecting true cycles
+/// where a value references itself or an ancestor.
 pub fn validate_data_value_pointers(
     data_section: &[u8],
     offset: usize,
-    visited: &mut std::collections::HashSet<usize>,
+    path: &mut std::collections::HashSet<usize>,
     depth: usize,
 ) -> Result<usize, PointerValidationError> {
     // Check depth limit
@@ -336,20 +341,21 @@ pub fn validate_data_value_pointers(
         return Err(PointerValidationError::DepthExceeded { depth });
     }
 
-    // Check for cycles
-    if visited.contains(&offset) {
+    // Check for cycles - only an error if this offset is an ancestor in the current path
+    if path.contains(&offset) {
         return Err(PointerValidationError::Cycle { offset });
     }
 
-    visited.insert(offset);
-
-    // Validate offset bounds
+    // Validate offset bounds before adding to path
     if offset >= data_section.len() {
         return Err(PointerValidationError::InvalidOffset {
             offset,
             reason: "Offset beyond data section".to_string(),
         });
     }
+
+    // Add to current path
+    path.insert(offset);
 
     // Read control byte
     let ctrl = data_section[offset];
@@ -359,80 +365,90 @@ pub fn validate_data_value_pointers(
     let mut cursor = offset + 1;
     let mut max_child_depth = depth;
 
-    match type_id {
-        0 => {
-            // Extended type
-            if cursor >= data_section.len() {
-                return Err(PointerValidationError::InvalidOffset {
-                    offset,
-                    reason: "Extended type truncated".to_string(),
-                });
-            }
-            let raw_ext_type = data_section[cursor];
-            cursor += 1;
-            let ext_type_id = 7 + raw_ext_type;
-
-            match ext_type_id {
-                11 => {
-                    // Array - validate all elements
-                    let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
-                    for _ in 0..count {
-                        let child_depth =
-                            validate_data_value_pointers(data_section, cursor, visited, depth + 1)?;
-                        max_child_depth = max_child_depth.max(child_depth);
-                        cursor = skip_data_value(data_section, cursor)?;
-                    }
-                }
-                8 | 9 | 10 | 14 | 15 => {
-                    // Int32, Uint64, Uint128, Bool, Float - no pointers
-                }
-                _ => {
-                    return Err(PointerValidationError::InvalidType {
+    let result = (|| {
+        match type_id {
+            0 => {
+                // Extended type
+                if cursor >= data_section.len() {
+                    return Err(PointerValidationError::InvalidOffset {
                         offset,
-                        type_id: ext_type_id,
+                        reason: "Extended type truncated".to_string(),
                     });
                 }
-            }
-        }
-        1 => {
-            // Pointer - critical to validate!
-            let pointer_offset = decode_pointer_offset(data_section, &mut cursor, payload)?;
+                let raw_ext_type = data_section[cursor];
+                cursor += 1;
+                let ext_type_id = 7 + raw_ext_type;
 
-            // Validate pointer target
-            if pointer_offset >= data_section.len() {
-                return Err(PointerValidationError::InvalidOffset {
-                    offset: pointer_offset,
-                    reason: "Pointer target beyond data section".to_string(),
-                });
+                match ext_type_id {
+                    11 => {
+                        // Array - validate all elements
+                        let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
+                        for _ in 0..count {
+                            let child_depth = validate_data_value_pointers(
+                                data_section,
+                                cursor,
+                                path,
+                                depth + 1,
+                            )?;
+                            max_child_depth = max_child_depth.max(child_depth);
+                            cursor = skip_data_value(data_section, cursor)?;
+                        }
+                    }
+                    8 | 9 | 10 | 14 | 15 => {
+                        // Int32, Uint64, Uint128, Bool, Float - no pointers
+                    }
+                    _ => {
+                        return Err(PointerValidationError::InvalidType {
+                            offset,
+                            type_id: ext_type_id,
+                        });
+                    }
+                }
             }
+            1 => {
+                // Pointer - critical to validate!
+                let pointer_offset = decode_pointer_offset(data_section, &mut cursor, payload)?;
 
-            // Recursively validate pointed-to value
-            let child_depth =
-                validate_data_value_pointers(data_section, pointer_offset, visited, depth + 1)?;
-            max_child_depth = max_child_depth.max(child_depth);
-        }
-        2..=6 => {
-            // String, Double, Bytes, Uint16, Uint32 - no pointers
-        }
-        7 => {
-            // Map - validate all values
-            let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
-            for _ in 0..count {
-                // Skip key
-                cursor = skip_data_value(data_section, cursor)?;
-                // Validate value
+                // Validate pointer target
+                if pointer_offset >= data_section.len() {
+                    return Err(PointerValidationError::InvalidOffset {
+                        offset: pointer_offset,
+                        reason: "Pointer target beyond data section".to_string(),
+                    });
+                }
+
+                // Recursively validate pointed-to value
                 let child_depth =
-                    validate_data_value_pointers(data_section, cursor, visited, depth + 1)?;
+                    validate_data_value_pointers(data_section, pointer_offset, path, depth + 1)?;
                 max_child_depth = max_child_depth.max(child_depth);
-                cursor = skip_data_value(data_section, cursor)?;
+            }
+            2..=6 => {
+                // String, Double, Bytes, Uint16, Uint32 - no pointers
+            }
+            7 => {
+                // Map - validate all values
+                let count = decode_size_for_validation(data_section, &mut cursor, payload)?;
+                for _ in 0..count {
+                    // Skip key
+                    cursor = skip_data_value(data_section, cursor)?;
+                    // Validate value
+                    let child_depth =
+                        validate_data_value_pointers(data_section, cursor, path, depth + 1)?;
+                    max_child_depth = max_child_depth.max(child_depth);
+                    cursor = skip_data_value(data_section, cursor)?;
+                }
+            }
+            _ => {
+                return Err(PointerValidationError::InvalidType { offset, type_id });
             }
         }
-        _ => {
-            return Err(PointerValidationError::InvalidType { offset, type_id });
-        }
-    }
+        Ok(max_child_depth)
+    })();
 
-    Ok(max_child_depth)
+    // Remove from path when backtracking (regardless of success/failure)
+    path.remove(&offset);
+
+    result
 }
 
 /// Decode size field for validation

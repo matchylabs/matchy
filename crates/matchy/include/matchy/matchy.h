@@ -76,6 +76,16 @@ namespace matchy {
 #define MATCHY_ERROR_IO -6
 
 /*
+ Schema validation error
+ */
+#define MATCHY_ERROR_SCHEMA_VALIDATION -7
+
+/*
+ Unknown schema error
+ */
+#define MATCHY_ERROR_UNKNOWN_SCHEMA -8
+
+/*
  MMDB data type constants (matching libmaxminddb)
  Extended type marker (internal use)
  */
@@ -566,6 +576,70 @@ extern "C" {
  ```
  */
 struct matchy_builder_t *matchy_builder_new(void);
+
+/*
+ Set case-insensitive matching mode
+
+ When enabled, all pattern/literal lookups will be case-insensitive.
+ IP lookups are always case-insensitive regardless of this setting.
+
+ # Parameters
+ * `builder` - Builder handle (must not be NULL)
+ * `case_insensitive` - true for case-insensitive, false for case-sensitive (default)
+
+ # Returns
+ * MATCHY_SUCCESS (0) on success
+ * MATCHY_ERROR_INVALID_PARAM if builder is NULL
+
+ # Safety
+ * `builder` must be a valid pointer returned by `matchy_builder_new()` or NULL
+ * `builder` must not have been freed with `matchy_builder_free()`
+
+ # Example
+ ```c
+ matchy_builder_t *builder = matchy_builder_new();
+ matchy_builder_set_case_insensitive(builder, true);
+ // Entries like "Evil.COM" will match queries for "evil.com", "EVIL.COM", etc.
+ ```
+ */
+int32_t matchy_builder_set_case_insensitive(struct matchy_builder_t *builder, bool case_insensitive);
+
+/*
+ Enable schema validation for a known database type
+
+ When a schema is set, all entries added via matchy_builder_add() will be
+ validated against the schema. Invalid entries will cause add to return
+ MATCHY_ERROR_SCHEMA_VALIDATION.
+
+ Known database types:
+ - "threatdb" - Threat intelligence database (ThreatDB-v1 schema)
+
+ # Parameters
+ * `builder` - Builder handle (must not be NULL)
+ * `schema_name` - Name of a known schema (e.g., "threatdb")
+
+ # Returns
+ * MATCHY_SUCCESS (0) on success
+ * MATCHY_ERROR_UNKNOWN_SCHEMA if the schema name is not recognized
+ * MATCHY_ERROR_INVALID_PARAM if builder or schema_name is NULL
+
+ # Safety
+ * `builder` must be a valid pointer returned by `matchy_builder_new()` or NULL
+ * `builder` must not have been freed with `matchy_builder_free()`
+ * `schema_name` must be a valid null-terminated C string or NULL
+
+ # Example
+ ```c
+ matchy_builder_t *builder = matchy_builder_new();
+ int result = matchy_builder_set_schema(builder, "threatdb");
+ if (result != MATCHY_SUCCESS) {
+     fprintf(stderr, "Unknown schema\n");
+     return 1;
+ }
+ // Now all entries will be validated against ThreatDB schema
+ ```
+ */
+int32_t matchy_builder_set_schema(struct matchy_builder_t *builder, const char *schema_name);
 
 /*
  Add an entry with associated data (as JSON)

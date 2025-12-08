@@ -41,6 +41,7 @@
     * [MMDB Integration](reference/mmdb-integration.md)
     * [MMDB Integration Design](reference/mmdb-integration-design.md)
     * [Input File Formats](reference/input-formats.md)
+    * [Schemas Reference](reference/schemas.md)
     * [Performance Benchmarks](reference/benchmarks.md)
     * [Architecture Overview](reference/architecture.md)
 

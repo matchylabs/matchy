@@ -106,20 +106,6 @@ pub fn cmd_inspect(database: PathBuf, json_output: bool, verbose: bool) -> Resul
                     }
                 }
 
-                // Show node count if present
-                if let Some(node_count) = map.get("node_count") {
-                    if let Some(count) = extract_uint_from_datavalue(node_count) {
-                        println!("  Node count:      {}", count);
-                    }
-                }
-
-                // Show record size if present
-                if let Some(record_size) = map.get("record_size") {
-                    if let Some(size) = extract_uint_from_datavalue(record_size) {
-                        println!("  Record size:     {} bits", size);
-                    }
-                }
-
                 if verbose {
                     println!();
                     println!("Full metadata:");

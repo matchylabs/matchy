@@ -1181,16 +1181,25 @@ impl Database {
     ///
     /// Returns the number of IP entries in the database.
     /// Returns 0 if the database has no IP data.
+    ///
+    /// For databases built with matchy, this returns the exact entry count from `ip_entry_count`.
+    /// For standard MMDB files (like MaxMind GeoLite2), it falls back to `node_count` which
+    /// represents the search tree size (a reasonable proxy for entry count).
     pub fn ip_count(&self) -> usize {
-        // Try to get from metadata first (most accurate)
         if let Some(DataValue::Map(map)) = self.metadata() {
+            // Try exact count first (matchy-built databases)
             if let Some(count) = map.get("ip_entry_count") {
                 if let Some(val) = Self::extract_uint_from_datavalue(count) {
                     return val as usize;
                 }
             }
+            // Fall back to node_count (standard MMDB files like MaxMind)
+            if let Some(count) = map.get("node_count") {
+                if let Some(val) = Self::extract_uint_from_datavalue(count) {
+                    return val as usize;
+                }
+            }
         }
-        // No accurate fallback for IP count
         0
     }
 
@@ -1549,6 +1558,72 @@ mod tests {
         assert!(
             result.is_none() || matches!(result, Some(QueryResult::NotFound)),
             "Domain should not match in IP-only database"
+        );
+    }
+
+    #[test]
+    fn test_ip_count_returns_node_count_for_standard_mmdb() {
+        // Standard MMDB files (like MaxMind) have node_count but not ip_entry_count
+        // ip_count() should fall back to node_count for these
+        let db = Database::from("tests/data/GeoLite2-Country.mmdb")
+            .open()
+            .unwrap();
+
+        let count = db.ip_count();
+
+        // Should return node_count (which is > 0 for a real database)
+        assert!(
+            count > 0,
+            "ip_count() should return node_count for standard MMDB"
+        );
+
+        // The GeoLite2-Country.mmdb has ~1.6 million nodes
+        assert!(
+            count > 1_000_000,
+            "GeoLite2-Country should have > 1M nodes, got {}",
+            count
+        );
+    }
+
+    #[test]
+    fn test_ip_count_prefers_ip_entry_count_when_available() {
+        // Build a database with matchy (which sets ip_entry_count)
+        use matchy_format::DatabaseBuilder;
+        use matchy_match_mode::MatchMode;
+        use std::collections::HashMap;
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("test.mxy");
+
+        let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+
+        let mut data1 = HashMap::new();
+        data1.insert("test".to_string(), DataValue::String("value1".to_string()));
+        builder.add_entry("10.0.0.0/8", data1).unwrap();
+
+        let mut data2 = HashMap::new();
+        data2.insert("test".to_string(), DataValue::String("value2".to_string()));
+        builder.add_entry("192.168.0.0/16", data2).unwrap();
+
+        let mut data3 = HashMap::new();
+        data3.insert("test".to_string(), DataValue::String("value3".to_string()));
+        builder.add_entry("172.16.0.0/12", data3).unwrap();
+
+        let db_data = builder.build().unwrap();
+        std::fs::write(&output_path, &db_data).unwrap();
+
+        let db = Database::from(output_path.to_str().unwrap())
+            .open()
+            .unwrap();
+
+        // Matchy-built databases have ip_entry_count which should be preferred
+        // Note: node_count will be larger than ip_entry_count due to tree structure
+        let count = db.ip_count();
+
+        // We added 3 IP entries
+        assert_eq!(
+            count, 3,
+            "ip_count() should return ip_entry_count (3) for matchy-built DB"
         );
     }
 }

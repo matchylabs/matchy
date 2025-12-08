@@ -94,8 +94,9 @@ pub fn validate_ip_tree(
         }
     };
 
-    // Track which nodes are visited during traversal
-    let mut visited = HashSet::new();
+    // Track current path for cycle detection, and all visited for statistics
+    let mut path = HashSet::new();
+    let mut all_visited = HashSet::new();
     let mut cycle_detected = false;
     let mut invalid_pointers = 0;
 
@@ -108,7 +109,8 @@ pub fn validate_ip_tree(
         node_count,
         node_bytes,
         tree_size,
-        &mut visited,
+        &mut path,
+        &mut all_visited,
         &mut cycle_detected,
         &mut invalid_pointers,
     );
@@ -118,8 +120,8 @@ pub fn validate_ip_tree(
     }
 
     // Gather statistics
-    result.stats.nodes_visited = visited.len() as u32;
-    result.stats.orphaned_count = node_count.saturating_sub(visited.len() as u32);
+    result.stats.nodes_visited = all_visited.len() as u32;
+    result.stats.orphaned_count = node_count.saturating_sub(all_visited.len() as u32);
     result.stats.cycle_detected = cycle_detected;
     result.stats.invalid_pointers = invalid_pointers;
 
@@ -149,6 +151,9 @@ pub fn validate_ip_tree(
 }
 
 /// Recursively traverse IP tree node and validate structure
+///
+/// The `path` set tracks ancestors in the current traversal path for cycle detection.
+/// The `all_visited` set tracks all nodes ever visited for statistics (orphan detection).
 #[allow(clippy::too_many_arguments)]
 fn traverse_ip_tree_node(
     buffer: &[u8],
@@ -158,14 +163,20 @@ fn traverse_ip_tree_node(
     node_count: u32,
     node_bytes: usize,
     tree_size: usize,
-    visited: &mut HashSet<u32>,
+    path: &mut HashSet<u32>,
+    all_visited: &mut HashSet<u32>,
     cycle_detected: &mut bool,
     invalid_pointers: &mut u32,
 ) -> Result<(), String> {
-    // Check for cycles
-    if visited.contains(&node_index) {
+    // Check for cycles - only an error if this node is an ancestor in current path
+    if path.contains(&node_index) {
         *cycle_detected = true;
         return Err(format!("Cycle detected at node {}", node_index));
+    }
+
+    // Skip if already fully validated (legitimate node sharing/reuse)
+    if all_visited.contains(&node_index) {
+        return Ok(());
     }
 
     // Check depth (shouldn't exceed IP bit count)
@@ -185,11 +196,14 @@ fn traverse_ip_tree_node(
         ));
     }
 
-    visited.insert(node_index);
+    // Add to current path and all visited
+    path.insert(node_index);
+    all_visited.insert(node_index);
 
     // Calculate node offset
     let node_offset = (node_index as usize) * node_bytes;
     if node_offset + node_bytes > tree_size {
+        path.remove(&node_index);
         return Err(format!(
             "Node {} offset {} exceeds tree size {}",
             node_index, node_offset, tree_size
@@ -197,13 +211,14 @@ fn traverse_ip_tree_node(
     }
 
     if node_offset + node_bytes > buffer.len() {
+        path.remove(&node_index);
         return Err(format!("Node {} would read beyond buffer", node_index));
     }
 
     // Read both records (left and right)
     let (left_record, right_record) = match node_bytes {
         6 => {
-            // 24-bit records
+            // 24-bit records (3 bytes each)
             let left = (buffer[node_offset] as u32) << 16
                 | (buffer[node_offset + 1] as u32) << 8
                 | (buffer[node_offset + 2] as u32);
@@ -213,19 +228,25 @@ fn traverse_ip_tree_node(
             (left, right)
         }
         7 => {
-            // 28-bit records (complex bit packing)
-            let left = (buffer[node_offset] as u32) << 20
-                | (buffer[node_offset + 1] as u32) << 12
-                | (buffer[node_offset + 2] as u32) << 4
-                | ((buffer[node_offset + 3] as u32) >> 4);
-            let right = ((buffer[node_offset + 3] as u32) & 0x0F) << 24
-                | (buffer[node_offset + 4] as u32) << 16
+            // 28-bit records (7 bytes total per node)
+            // Layout: | left[23..0] | left[27..24]:right[27..24] | right[23..0] |
+            // Bytes:  |  0  1  2    |            3               |   4  5  6    |
+            let middle = buffer[node_offset + 3];
+            let left_low = (buffer[node_offset] as u32) << 16
+                | (buffer[node_offset + 1] as u32) << 8
+                | (buffer[node_offset + 2] as u32);
+            let left_high = ((middle >> 4) & 0x0F) as u32;
+            let left = (left_high << 24) | left_low;
+
+            let right_low = (buffer[node_offset + 4] as u32) << 16
                 | (buffer[node_offset + 5] as u32) << 8
                 | (buffer[node_offset + 6] as u32);
+            let right_high = (middle & 0x0F) as u32;
+            let right = (right_high << 24) | right_low;
             (left, right)
         }
         8 => {
-            // 32-bit records
+            // 32-bit records (4 bytes each)
             let left = u32::from_be_bytes([
                 buffer[node_offset],
                 buffer[node_offset + 1],
@@ -241,6 +262,7 @@ fn traverse_ip_tree_node(
             (left, right)
         }
         _ => {
+            path.remove(&node_index);
             return Err(format!("Invalid node_bytes: {}", node_bytes));
         }
     };
@@ -264,7 +286,8 @@ fn traverse_ip_tree_node(
                 node_count,
                 node_bytes,
                 tree_size,
-                visited,
+                path,
+                all_visited,
                 cycle_detected,
                 invalid_pointers,
             )?;
@@ -282,13 +305,17 @@ fn traverse_ip_tree_node(
                 node_count,
                 node_bytes,
                 tree_size,
-                visited,
+                path,
+                all_visited,
                 cycle_detected,
                 invalid_pointers,
             )?;
         }
         // If right_record >= node_count, it's a data pointer or empty
     }
+
+    // Remove from path when backtracking
+    path.remove(&node_index);
 
     Ok(())
 }

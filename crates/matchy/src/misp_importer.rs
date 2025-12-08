@@ -471,6 +471,210 @@ impl MispImporter {
         Ok(builder)
     }
 
+    /// Build a database with ThreatDB-compatible schema output
+    ///
+    /// This produces yield values that conform to the ThreatDB v1 schema:
+    /// - `threat_level`: "critical", "high", "medium", "low", "unknown"
+    /// - `category`: MISP category (passed through)
+    /// - `source`: Organization name from MISP Orgc
+    /// - `indicator_type`: MISP attribute type (ip-src, domain, etc.)
+    /// - `tags`: Array of tag strings
+    /// - `description`: Comment or event info
+    /// - `first_seen`: Event date as ISO 8601 datetime
+    ///
+    /// This is the recommended mode for building databases that need schema
+    /// validation or interoperability with other ThreatDB-compatible tools.
+    pub fn build_database_threatdb(
+        &self,
+        match_mode: MatchMode,
+    ) -> Result<DatabaseBuilder, ParaglobError> {
+        let mut builder = DatabaseBuilder::new(match_mode)
+            .with_database_type("ThreatDB-v1")
+            .with_description("en", "Threat intelligence database from MISP JSON feeds");
+
+        for event in &self.events {
+            self.process_event_threatdb(event, &mut builder)?;
+        }
+
+        Ok(builder)
+    }
+
+    /// Process event with ThreatDB-compatible output
+    fn process_event_threatdb(
+        &self,
+        event: &MispEvent,
+        builder: &mut DatabaseBuilder,
+    ) -> Result<(), ParaglobError> {
+        // Build ThreatDB-compatible event metadata
+        let event_metadata = self.build_event_metadata_threatdb(event);
+
+        // Process direct attributes
+        for attr in &event.attributes {
+            self.process_attribute_threatdb(attr, &event_metadata, builder)?;
+        }
+
+        // Process object-embedded attributes
+        for obj in &event.objects {
+            for attr in &obj.attributes {
+                self.process_attribute_threatdb(attr, &event_metadata, builder)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Build ThreatDB-compatible metadata from event
+    fn build_event_metadata_threatdb(&self, event: &MispEvent) -> HashMap<String, DataValue> {
+        let mut metadata = HashMap::new();
+
+        // Map MISP threat_level_id to ThreatDB threat_level
+        // MISP: 1=High, 2=Medium, 3=Low, 4=Undefined
+        // ThreatDB: "critical", "high", "medium", "low", "unknown"
+        let threat_level = match event.threat_level_id {
+            Some(1) => "high",
+            Some(2) => "medium",
+            Some(3) => "low",
+            _ => "unknown",
+        };
+        metadata.insert(
+            "threat_level".to_string(),
+            DataValue::String(threat_level.to_string()),
+        );
+
+        // Map Orgc.name to source (required for ThreatDB)
+        if let Some(orgc) = &event.orgc {
+            if let Some(name) = &orgc.name {
+                metadata.insert("source".to_string(), DataValue::String(name.clone()));
+            }
+        }
+        // If no org name, use a default to satisfy required field
+        if !metadata.contains_key("source") {
+            metadata.insert(
+                "source".to_string(),
+                DataValue::String("misp-import".to_string()),
+            );
+        }
+
+        // Use event info as description
+        if let Some(info) = &event.info {
+            metadata.insert("description".to_string(), DataValue::String(info.clone()));
+        }
+
+        // Convert event date to first_seen (ISO 8601)
+        if let Some(date) = &event.date {
+            // MISP date is YYYY-MM-DD, append time for ISO 8601
+            metadata.insert(
+                "first_seen".to_string(),
+                DataValue::String(format!("{}T00:00:00Z", date)),
+            );
+        }
+
+        // Collect tags as array (ThreatDB format)
+        if !event.tags.is_empty() {
+            let tag_values: Vec<DataValue> = event
+                .tags
+                .iter()
+                .map(|t| DataValue::String(t.name.clone()))
+                .collect();
+            metadata.insert("tags".to_string(), DataValue::Array(tag_values));
+
+            // Extract TLP from tags if present
+            for tag in &event.tags {
+                let tag_lower = tag.name.to_lowercase();
+                if tag_lower.starts_with("tlp:") {
+                    let tlp = match tag_lower.as_str() {
+                        "tlp:white" | "tlp:clear" => "clear",
+                        "tlp:green" => "green",
+                        "tlp:amber" => "amber",
+                        "tlp:amber+strict" => "amber+strict",
+                        "tlp:red" => "red",
+                        _ => continue,
+                    };
+                    metadata.insert("tlp".to_string(), DataValue::String(tlp.to_string()));
+                    break;
+                }
+            }
+        }
+
+        metadata
+    }
+
+    /// Process a single attribute with ThreatDB-compatible output
+    fn process_attribute_threatdb(
+        &self,
+        attr: &MispAttribute,
+        base_metadata: &HashMap<String, DataValue>,
+        builder: &mut DatabaseBuilder,
+    ) -> Result<(), ParaglobError> {
+        let mut metadata = base_metadata.clone();
+
+        // indicator_type = MISP attribute type
+        metadata.insert(
+            "indicator_type".to_string(),
+            DataValue::String(attr.attribute_type.clone()),
+        );
+
+        // category = MISP category (pass through)
+        if let Some(category) = &attr.category {
+            metadata.insert("category".to_string(), DataValue::String(category.clone()));
+        } else {
+            // Default category if none provided (required for ThreatDB)
+            metadata.insert(
+                "category".to_string(),
+                DataValue::String("Other".to_string()),
+            );
+        }
+
+        // Use comment as description if present and no description yet
+        if let Some(comment) = &attr.comment {
+            if !comment.is_empty() && !metadata.contains_key("description") {
+                metadata.insert(
+                    "description".to_string(),
+                    DataValue::String(comment.clone()),
+                );
+            }
+        }
+
+        // Merge attribute tags with event tags
+        if !attr.tags.is_empty() {
+            let mut all_tags: Vec<DataValue> = metadata
+                .get("tags")
+                .and_then(|v| {
+                    if let DataValue::Array(arr) = v {
+                        Some(arr.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            for tag in &attr.tags {
+                all_tags.push(DataValue::String(tag.name.clone()));
+
+                // Check for TLP in attribute tags too
+                let tag_lower = tag.name.to_lowercase();
+                if tag_lower.starts_with("tlp:") && !metadata.contains_key("tlp") {
+                    let tlp = match tag_lower.as_str() {
+                        "tlp:white" | "tlp:clear" => "clear",
+                        "tlp:green" => "green",
+                        "tlp:amber" => "amber",
+                        "tlp:amber+strict" => "amber+strict",
+                        "tlp:red" => "red",
+                        _ => continue,
+                    };
+                    metadata.insert("tlp".to_string(), DataValue::String(tlp.to_string()));
+                }
+            }
+
+            metadata.insert("tags".to_string(), DataValue::Array(all_tags));
+        }
+
+        // Extract and add indicators based on type
+        self.extract_indicators(&attr.attribute_type, &attr.value, metadata, builder)?;
+
+        Ok(())
+    }
+
     /// Process event with minimal metadata (just threat level and tags)
     fn process_event_minimal(
         &self,

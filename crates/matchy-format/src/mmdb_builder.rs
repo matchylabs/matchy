@@ -106,6 +106,33 @@ impl DatabaseBuilder {
         self
     }
 
+    /// Set the match mode for pattern matching
+    ///
+    /// This controls whether literal and glob pattern matching is case-sensitive
+    /// or case-insensitive. IP address matching is always case-insensitive regardless
+    /// of this setting.
+    ///
+    /// # Example
+    /// ```
+    /// use matchy_format::DatabaseBuilder;
+    /// use matchy_match_mode::MatchMode;
+    ///
+    /// let builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
+    ///     .with_match_mode(MatchMode::CaseInsensitive);
+    /// ```
+    pub fn with_match_mode(mut self, match_mode: MatchMode) -> Self {
+        self.match_mode = match_mode;
+        self
+    }
+
+    /// Set the match mode (mutable borrow version)
+    ///
+    /// This is useful when you need to change the match mode after construction
+    /// without consuming the builder.
+    pub fn set_match_mode(&mut self, match_mode: MatchMode) {
+        self.match_mode = match_mode;
+    }
+
     /// Add an entry with auto-detection
     ///
     /// Automatically detects whether the key is an IP address, literal string, or glob pattern.

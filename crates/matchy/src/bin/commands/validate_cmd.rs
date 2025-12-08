@@ -41,6 +41,7 @@ pub fn cmd_validate(
             "stats": {
                 "file_size": report.stats.file_size,
                 "version": report.stats.version,
+                "database_type": report.stats.database_type,
                 "ac_node_count": report.stats.ac_node_count,
                 "pattern_count": report.stats.pattern_count,
                 "ip_entry_count": report.stats.ip_entry_count,
@@ -48,6 +49,9 @@ pub fn cmd_validate(
                 "glob_count": report.stats.glob_count,
                 "has_data_section": report.stats.has_data_section,
                 "has_ac_literal_mapping": report.stats.has_ac_literal_mapping,
+                "schema_validated": report.stats.schema_validated,
+                "schema_entries_checked": report.stats.schema_entries_checked,
+                "schema_validation_failures": report.stats.schema_validation_failures,
             }
         });
         println!("{}", serde_json::to_string_pretty(&output)?);

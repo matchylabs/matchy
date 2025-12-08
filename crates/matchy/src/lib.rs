@@ -110,6 +110,15 @@ use matchy_format::mmdb;
 /// - `Worker` - Processes batches with extraction + matching  
 /// - `LineBatch`, `MatchResult`, `LineMatch` - Data structures
 pub mod processing;
+/// Schema validation for yield values
+///
+/// Validates that yield values conform to a schema during database building.
+pub mod schema_validation;
+/// Built-in database schemas for yield value validation
+///
+/// Matchy includes schemas that define the structure of yield values
+/// for common database types like ThreatDB.
+pub mod schemas;
 /// SIMD-accelerated utilities for pattern matching
 ///
 /// Provides optimized implementations of common operations using SIMD instructions:
@@ -194,6 +203,33 @@ pub use matchy_format::DatabaseBuilder;
 /// or glob pattern. Used with [`DatabaseBuilder::detect_entry_type`] for explicit
 /// type control.
 pub use matchy_format::EntryType;
+
+// Schema validation re-exports
+/// Schema validator for validating yield values against JSON schemas
+///
+/// Use this to validate data before adding entries to a database with a known schema.
+///
+/// # Example
+/// ```rust,no_run
+/// use matchy::SchemaValidator;
+/// use matchy::DataValue;
+/// use std::collections::HashMap;
+///
+/// // Create validator for ThreatDB schema
+/// let validator = SchemaValidator::new("threatdb")?;
+///
+/// // Validate a yield value
+/// let mut data = HashMap::new();
+/// data.insert("threat_level".to_string(), DataValue::String("high".to_string()));
+/// data.insert("category".to_string(), DataValue::String("malware".to_string()));
+/// data.insert("source".to_string(), DataValue::String("abuse.ch".to_string()));
+///
+/// validator.validate(&data)?; // Ok - valid ThreatDB entry
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub use crate::schema_validation::{
+    SchemaError, SchemaValidationError, SchemaValidator, ValidationErrorDetail,
+};
 
 // Version information
 /// Library version string

@@ -11,6 +11,7 @@ members = [
     "crates/matchy-extractor",
     "crates/matchy-wasm",
 ]
+default-members = ["crates/matchy"]
 resolver = "2"
 
 [workspace.package]

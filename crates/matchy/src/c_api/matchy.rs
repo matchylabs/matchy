@@ -4,6 +4,8 @@
 //! containing IP addresses and patterns. This is the primary public API.
 
 use crate::database::{Database, DatabaseError, DatabaseStatsSnapshot, QueryResult};
+use crate::schema_validation::SchemaValidator;
+use crate::schemas::{get_schema_info, is_known_database_type};
 use crate::DatabaseBuilder;
 use matchy_data_format::DataValue;
 use matchy_match_mode::MatchMode;
@@ -34,6 +36,10 @@ pub const MATCHY_ERROR_OUT_OF_MEMORY: i32 = -4;
 pub const MATCHY_ERROR_INVALID_PARAM: i32 = -5;
 /// I/O error
 pub const MATCHY_ERROR_IO: i32 = -6;
+/// Schema validation error
+pub const MATCHY_ERROR_SCHEMA_VALIDATION: i32 = -7;
+/// Unknown schema error
+pub const MATCHY_ERROR_UNKNOWN_SCHEMA: i32 = -8;
 
 // ============================================================================
 // OPAQUE HANDLES
@@ -70,6 +76,8 @@ pub struct matchy_result_t {
 
 struct MatchyBuilderInternal {
     builder: DatabaseBuilder,
+    /// Optional schema validator (set via matchy_builder_set_schema)
+    validator: Option<SchemaValidator>,
 }
 
 /// Internal database variant - either static or watching
@@ -243,8 +251,126 @@ impl matchy_t {
 #[no_mangle]
 pub extern "C" fn matchy_builder_new() -> *mut matchy_builder_t {
     let builder = DatabaseBuilder::new(MatchMode::CaseSensitive);
-    let internal = Box::new(MatchyBuilderInternal { builder });
+    let internal = Box::new(MatchyBuilderInternal {
+        builder,
+        validator: None,
+    });
     matchy_builder_t::from_internal(internal)
+}
+
+/// Set case-insensitive matching mode
+///
+/// When enabled, all pattern/literal lookups will be case-insensitive.
+/// IP lookups are always case-insensitive regardless of this setting.
+///
+/// # Parameters
+/// * `builder` - Builder handle (must not be NULL)
+/// * `case_insensitive` - true for case-insensitive, false for case-sensitive (default)
+///
+/// # Returns
+/// * MATCHY_SUCCESS (0) on success
+/// * MATCHY_ERROR_INVALID_PARAM if builder is NULL
+///
+/// # Safety
+/// * `builder` must be a valid pointer returned by `matchy_builder_new()` or NULL
+/// * `builder` must not have been freed with `matchy_builder_free()`
+///
+/// # Example
+/// ```c
+/// matchy_builder_t *builder = matchy_builder_new();
+/// matchy_builder_set_case_insensitive(builder, true);
+/// // Entries like "Evil.COM" will match queries for "evil.com", "EVIL.COM", etc.
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn matchy_builder_set_case_insensitive(
+    builder: *mut matchy_builder_t,
+    case_insensitive: bool,
+) -> i32 {
+    if builder.is_null() {
+        return MATCHY_ERROR_INVALID_PARAM;
+    }
+
+    let internal = matchy_builder_t::as_internal_mut(builder);
+    let match_mode = if case_insensitive {
+        MatchMode::CaseInsensitive
+    } else {
+        MatchMode::CaseSensitive
+    };
+    internal.builder.set_match_mode(match_mode);
+
+    MATCHY_SUCCESS
+}
+
+/// Enable schema validation for a known database type
+///
+/// When a schema is set, all entries added via matchy_builder_add() will be
+/// validated against the schema. Invalid entries will cause add to return
+/// MATCHY_ERROR_SCHEMA_VALIDATION.
+///
+/// Known database types:
+/// - "threatdb" - Threat intelligence database (ThreatDB-v1 schema)
+///
+/// # Parameters
+/// * `builder` - Builder handle (must not be NULL)
+/// * `schema_name` - Name of a known schema (e.g., "threatdb")
+///
+/// # Returns
+/// * MATCHY_SUCCESS (0) on success
+/// * MATCHY_ERROR_UNKNOWN_SCHEMA if the schema name is not recognized
+/// * MATCHY_ERROR_INVALID_PARAM if builder or schema_name is NULL
+///
+/// # Safety
+/// * `builder` must be a valid pointer returned by `matchy_builder_new()` or NULL
+/// * `builder` must not have been freed with `matchy_builder_free()`
+/// * `schema_name` must be a valid null-terminated C string or NULL
+///
+/// # Example
+/// ```c
+/// matchy_builder_t *builder = matchy_builder_new();
+/// int result = matchy_builder_set_schema(builder, "threatdb");
+/// if (result != MATCHY_SUCCESS) {
+///     fprintf(stderr, "Unknown schema\n");
+///     return 1;
+/// }
+/// // Now all entries will be validated against ThreatDB schema
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn matchy_builder_set_schema(
+    builder: *mut matchy_builder_t,
+    schema_name: *const c_char,
+) -> i32 {
+    if builder.is_null() || schema_name.is_null() {
+        return MATCHY_ERROR_INVALID_PARAM;
+    }
+
+    let name = match CStr::from_ptr(schema_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return MATCHY_ERROR_INVALID_PARAM,
+    };
+
+    // Check if this is a known schema
+    if !is_known_database_type(name) {
+        return MATCHY_ERROR_UNKNOWN_SCHEMA;
+    }
+
+    // Create validator
+    let validator = match SchemaValidator::new(name) {
+        Ok(v) => v,
+        Err(_) => return MATCHY_ERROR_INVALID_FORMAT,
+    };
+
+    // Get the canonical database type and set it
+    let internal = matchy_builder_t::as_internal_mut(builder);
+    if let Some(info) = get_schema_info(name) {
+        // DatabaseBuilder's with_database_type takes ownership and returns Self
+        // We need to use a placeholder to swap it out
+        let placeholder = DatabaseBuilder::new(MatchMode::CaseSensitive);
+        let old_builder = std::mem::replace(&mut internal.builder, placeholder);
+        internal.builder = old_builder.with_database_type(info.database_type);
+    }
+    internal.validator = Some(validator);
+
+    MATCHY_SUCCESS
 }
 
 /// Add an entry with associated data (as JSON)
@@ -309,6 +435,14 @@ pub unsafe extern "C" fn matchy_builder_add(
     };
 
     let internal = matchy_builder_t::as_internal_mut(builder);
+
+    // Validate against schema if one is set
+    if let Some(ref validator) = internal.validator {
+        if validator.validate(&data_map).is_err() {
+            return MATCHY_ERROR_SCHEMA_VALIDATION;
+        }
+    }
+
     match internal.builder.add_entry(key_str, data_map) {
         Ok(_) => MATCHY_SUCCESS,
         Err(_) => MATCHY_ERROR_INVALID_FORMAT,
