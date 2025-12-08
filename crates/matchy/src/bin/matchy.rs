@@ -65,10 +65,6 @@ enum Commands {
         #[arg(short, long)]
         unique: bool,
 
-        /// Number of worker threads (default: 1, use "auto" for all cores)
-        #[arg(short = 'j', long)]
-        threads: Option<String>,
-
         /// Show extraction statistics to stderr
         #[arg(short, long)]
         stats: bool,
@@ -288,7 +284,6 @@ fn main() -> Result<()> {
             min_labels,
             no_boundaries,
             unique,
-            threads,
             stats,
             show_candidates,
         } => cmd_extract(
@@ -298,7 +293,6 @@ fn main() -> Result<()> {
             min_labels,
             no_boundaries,
             unique,
-            threads,
             stats,
             show_candidates,
         ),

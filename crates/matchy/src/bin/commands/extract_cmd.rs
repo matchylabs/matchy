@@ -44,7 +44,6 @@ pub fn cmd_extract(
     min_labels: usize,
     no_boundaries: bool,
     unique: bool,
-    threads: Option<String>,
     show_stats: bool,
     show_candidates: bool,
 ) -> Result<()> {
@@ -128,16 +127,6 @@ pub fn cmd_extract(
         eprintln!("[INFO] Word boundaries: {}", !no_boundaries);
         eprintln!("[INFO] Unique mode: {}", unique);
     }
-
-    // TODO: Support parallel processing based on threads parameter
-    let _num_threads = match threads.as_deref() {
-        None | Some("auto") | Some("0") => std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1),
-        Some(s) => s.parse::<usize>().with_context(|| {
-            format!("Invalid thread count '{}', expected a number or 'auto'", s)
-        })?,
-    };
 
     let start_time = Instant::now();
     let mut stats = ExtractionStats::default();
