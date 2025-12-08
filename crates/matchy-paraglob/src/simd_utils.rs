@@ -29,6 +29,15 @@ use std::arch::aarch64::*;
 /// * `text` - Input byte slice (ASCII or UTF-8)
 /// * `output` - Pre-allocated Vec to write lowercase bytes into
 ///
+/// # Safety
+/// - Caller must ensure this function is only called on CPUs with SSE2 support.
+///   On x86_64, SSE2 is guaranteed by the architecture, but this is enforced
+///   via `#[target_feature(enable = "sse2")]`.
+/// - The function uses `Vec::set_len()` after writing SIMD data. This is safe because:
+///   - We call `reserve()` first to ensure sufficient capacity
+///   - We write the data with `_mm_storeu_si128` before calling `set_len()`
+///   - The SIMD store writes exactly 16 bytes of valid (lowercased) data
+///
 /// # Example
 /// ```ignore
 /// use matchy_paraglob::simd_utils::ascii_lowercase_simd;
@@ -69,10 +78,13 @@ unsafe fn ascii_lowercase_simd_x86(text: &[u8], output: &mut Vec<u8>) {
         let offset = _mm_and_si128(to_lower, is_upper);
         let lowercased = _mm_add_epi8(chunk, offset);
 
-        // Write directly to Vec (no intermediate buffer)
+        // Write directly to Vec's spare capacity, then update length
+        // SAFETY: We reserved text.len() bytes above, and simd_end <= text.len(),
+        // so we have capacity for all SIMD writes. We write before set_len to
+        // ensure the bytes are initialized before we claim they exist.
         let old_len = output.len();
-        output.set_len(old_len + 16);
         _mm_storeu_si128(output.as_mut_ptr().add(old_len) as *mut __m128i, lowercased);
+        output.set_len(old_len + 16);
 
         i += 16;
     }
@@ -86,6 +98,14 @@ unsafe fn ascii_lowercase_simd_x86(text: &[u8], output: &mut Vec<u8>) {
 /// Convert ASCII text to lowercase using SIMD (aarch64/NEON)
 ///
 /// This function processes 16 bytes at a time using NEON instructions.
+///
+/// # Safety
+/// - Caller must ensure this function is only called on CPUs with NEON support.
+///   On aarch64, NEON is guaranteed by the architecture.
+/// - The function uses `Vec::set_len()` after writing SIMD data. This is safe because:
+///   - We call `reserve()` first to ensure sufficient capacity
+///   - We write the data with `vst1q_u8` before calling `set_len()`
+///   - The SIMD store writes exactly 16 bytes of valid (lowercased) data
 #[cfg(target_arch = "aarch64")]
 unsafe fn ascii_lowercase_simd_arm(text: &[u8], output: &mut Vec<u8>) {
     output.clear();
@@ -114,10 +134,13 @@ unsafe fn ascii_lowercase_simd_arm(text: &[u8], output: &mut Vec<u8>) {
         let offset = vandq_u8(to_lower, is_upper);
         let lowercased = vaddq_u8(chunk, offset);
 
-        // Write directly to Vec (no intermediate buffer)
+        // Write directly to Vec's spare capacity, then update length
+        // SAFETY: We reserved text.len() bytes above, and simd_end <= text.len(),
+        // so we have capacity for all SIMD writes. We write before set_len to
+        // ensure the bytes are initialized before we claim they exist.
         let old_len = output.len();
-        output.set_len(old_len + 16);
         vst1q_u8(output.as_mut_ptr().add(old_len), lowercased);
+        output.set_len(old_len + 16);
 
         i += 16;
     }
@@ -154,7 +177,8 @@ unsafe fn ascii_lowercase_simd_arm(text: &[u8], output: &mut Vec<u8>) {
 pub fn ascii_lowercase_simd(text: &[u8], output: &mut Vec<u8>) {
     #[cfg(target_arch = "x86_64")]
     {
-        // SSE2 is guaranteed on x86_64, but use runtime check for safety
+        // SAFETY: SSE2 is guaranteed on x86_64, but we use runtime check for extra safety.
+        // The function requires SSE2 via #[target_feature(enable = "sse2")].
         if is_x86_feature_detected!("sse2") {
             unsafe { ascii_lowercase_simd_x86(text, output) };
         }
@@ -162,7 +186,8 @@ pub fn ascii_lowercase_simd(text: &[u8], output: &mut Vec<u8>) {
 
     #[cfg(target_arch = "aarch64")]
     {
-        // NEON is guaranteed on aarch64
+        // SAFETY: NEON is guaranteed on all aarch64 CPUs (it's part of the base architecture).
+        // The function only uses NEON intrinsics which are always available.
         unsafe { ascii_lowercase_simd_arm(text, output) };
     }
 
