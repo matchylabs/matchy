@@ -92,7 +92,7 @@ The ThreatDB schema (`threatdb`) is designed for threat intelligence databases, 
 | `description` | string | Human-readable notes |
 | `tags` | array | List of strings for classification |
 | `reference` | string | URL to external documentation |
-| `tlp` | string | Traffic Light Protocol: `clear`, `green`, `amber`, `amber+strict`, `red` |
+| `tlp` | string | Traffic Light Protocol: `CLEAR`, `GREEN`, `AMBER`, `AMBER+STRICT`, `RED` |
 | `indicator_type` | string | What the key represents: `ip-src`, `domain`, `url`, `sha256`, etc. |
 
 ### Threat Levels
@@ -118,11 +118,11 @@ rat          stealer      ddos
 
 | Value | Sharing |
 |-------|---------|
-| `clear` | Unrestricted (formerly WHITE) |
-| `green` | Community-wide |
-| `amber` | Limited distribution |
-| `amber+strict` | Organization only |
-| `red` | Named recipients only |
+| `CLEAR` | Unrestricted (formerly WHITE) |
+| `GREEN` | Community-wide |
+| `AMBER` | Limited distribution |
+| `AMBER+STRICT` | Organization only |
+| `RED` | Named recipients only |
 
 ### Example: CSV Input
 
@@ -144,7 +144,7 @@ key,threat_level,category,source,confidence,tags
     "confidence": 95,
     "first_seen": "2024-01-15T10:30:00Z",
     "tags": ["emotet", "banking-trojan"],
-    "tlp": "amber"
+    "tlp": "AMBER"
   },
   "*.evil.com": {
     "threat_level": "medium",

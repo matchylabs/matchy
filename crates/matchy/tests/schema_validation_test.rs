@@ -64,7 +64,7 @@ fn test_build_threatdb_with_optional_fields() {
                 "category": "malware",
                 "source": "test-feed",
                 "confidence": 85,
-                "tlp": "amber",
+                "tlp": "AMBER",
                 "description": "Known malware C2 server",
                 "tags": ["emotet", "banking-trojan"]
             }

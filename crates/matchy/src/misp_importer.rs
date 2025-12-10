@@ -583,11 +583,11 @@ impl MispImporter {
                 let tag_lower = tag.name.to_lowercase();
                 if tag_lower.starts_with("tlp:") {
                     let tlp = match tag_lower.as_str() {
-                        "tlp:white" | "tlp:clear" => "clear",
-                        "tlp:green" => "green",
-                        "tlp:amber" => "amber",
-                        "tlp:amber+strict" => "amber+strict",
-                        "tlp:red" => "red",
+                        "tlp:white" | "tlp:clear" => "CLEAR",
+                        "tlp:green" => "GREEN",
+                        "tlp:amber" => "AMBER",
+                        "tlp:amber+strict" => "AMBER+STRICT",
+                        "tlp:red" => "RED",
                         _ => continue,
                     };
                     metadata.insert("tlp".to_string(), DataValue::String(tlp.to_string()));
@@ -655,11 +655,11 @@ impl MispImporter {
                 let tag_lower = tag.name.to_lowercase();
                 if tag_lower.starts_with("tlp:") && !metadata.contains_key("tlp") {
                     let tlp = match tag_lower.as_str() {
-                        "tlp:white" | "tlp:clear" => "clear",
-                        "tlp:green" => "green",
-                        "tlp:amber" => "amber",
-                        "tlp:amber+strict" => "amber+strict",
-                        "tlp:red" => "red",
+                        "tlp:white" | "tlp:clear" => "CLEAR",
+                        "tlp:green" => "GREEN",
+                        "tlp:amber" => "AMBER",
+                        "tlp:amber+strict" => "AMBER+STRICT",
+                        "tlp:red" => "RED",
                         _ => continue,
                     };
                     metadata.insert("tlp".to_string(), DataValue::String(tlp.to_string()));

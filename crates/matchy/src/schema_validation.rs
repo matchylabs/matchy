@@ -318,7 +318,7 @@ mod tests {
             "description".to_string(),
             DataValue::String("Known malware C2".to_string()),
         );
-        data.insert("tlp".to_string(), DataValue::String("amber".to_string()));
+        data.insert("tlp".to_string(), DataValue::String("AMBER".to_string()));
         assert!(validator.validate(&data).is_ok());
     }
 

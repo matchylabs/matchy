@@ -78,8 +78,8 @@
     },
     "tlp": {
       "type": "string",
-      "enum": ["clear", "green", "amber", "amber+strict", "red"],
-      "description": "Traffic Light Protocol marking for information sharing. See https://www.cisa.gov/tlp for definitions. 'clear' = TLP:CLEAR (formerly WHITE), unrestricted. 'green' = community-wide. 'amber' = limited distribution. 'amber+strict' = organization only. 'red' = named recipients only."
+      "enum": ["CLEAR", "GREEN", "AMBER", "AMBER+STRICT", "RED"],
+      "description": "Traffic Light Protocol marking for information sharing. See https://www.cisa.gov/tlp for definitions. CLEAR = unrestricted (formerly WHITE). GREEN = community-wide. AMBER = limited distribution. AMBER+STRICT = organization only. RED = named recipients only."
     },
     "indicator_type": {
       "type": "string",
