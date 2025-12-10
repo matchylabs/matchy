@@ -9,6 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Disable Cargo's automatic cache garbage collection to avoid SQLite lock
+  # contention when multiple jobs share the same cached ~/.cargo directory
+  CARGO_GC_AUTO: 0
 
 jobs:
   preflight:
