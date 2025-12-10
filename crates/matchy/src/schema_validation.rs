@@ -96,9 +96,15 @@ pub enum SchemaError {
 
 /// Validates yield values against a JSON Schema
 ///
-/// The validator compiles the schema once and can be reused for many validations.
+/// The validator stores the parsed schema JSON and creates a compiled validator
+/// on each validation call. This is necessary because `jsonschema::Validator`
+/// uses `Rc` internally and is not `Send + Sync`, but `EntryValidator` requires
+/// thread safety for use with `DatabaseBuilder`.
+///
+/// The schema compilation is fast enough that this approach is acceptable for
+/// build-time validation where correctness matters more than raw performance.
 pub struct SchemaValidator {
-    validator: Validator,
+    schema: serde_json::Value,
     schema_name: String,
 }
 
@@ -140,13 +146,22 @@ impl SchemaValidator {
     pub fn from_json(name: &str, schema_json: &str) -> Result<Self, SchemaError> {
         let schema: serde_json::Value = serde_json::from_str(schema_json)?;
 
-        let validator =
-            Validator::new(&schema).map_err(|e| SchemaError::SchemaCompileError(e.to_string()))?;
+        // Validate that the schema compiles successfully
+        Validator::new(&schema).map_err(|e| SchemaError::SchemaCompileError(e.to_string()))?;
 
         Ok(Self {
-            validator,
+            schema,
             schema_name: name.to_string(),
         })
+    }
+
+    /// Create a compiled validator for this schema
+    ///
+    /// This is called internally for each validation. The jsonschema crate's
+    /// Validator is not Send+Sync, so we create it fresh each time.
+    fn create_validator(&self) -> Validator {
+        // This should never fail since we validated the schema in from_json()
+        Validator::new(&self.schema).expect("schema was validated at construction time")
     }
 
     /// Get the schema name
@@ -172,14 +187,15 @@ impl SchemaValidator {
         // Convert DataValue map to serde_json::Value for validation
         let json_value = data_map_to_json(data)?;
 
+        let validator = self.create_validator();
+
         // Run validation
-        let result = self.validator.validate(&json_value);
+        let result = validator.validate(&json_value);
 
         if result.is_ok() {
             Ok(())
         } else {
-            let errors: Vec<ValidationErrorDetail> = self
-                .validator
+            let errors: Vec<ValidationErrorDetail> = validator
                 .iter_errors(&json_value)
                 .map(|err| ValidationErrorDetail {
                     path: err.instance_path().to_string(),
@@ -197,14 +213,16 @@ impl SchemaValidator {
         data: &HashMap<String, DataValue>,
     ) -> Vec<ValidationErrorDetail> {
         match data_map_to_json(data) {
-            Ok(json_value) => self
-                .validator
-                .iter_errors(&json_value)
-                .map(|err| ValidationErrorDetail {
-                    path: err.instance_path().to_string(),
-                    message: err.to_string(),
-                })
-                .collect(),
+            Ok(json_value) => {
+                let validator = self.create_validator();
+                validator
+                    .iter_errors(&json_value)
+                    .map(|err| ValidationErrorDetail {
+                        path: err.instance_path().to_string(),
+                        message: err.to_string(),
+                    })
+                    .collect()
+            }
             Err(e) => vec![ValidationErrorDetail {
                 path: String::new(),
                 message: format!("Failed to convert data: {}", e),
