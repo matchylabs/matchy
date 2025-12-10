@@ -22,7 +22,7 @@ C_TEST = crates/matchy/tests/test_c_api
 C_EXT_TEST = crates/matchy/tests/test_c_api_extensions
 MMDB_TEST = crates/matchy/tests/test_mmdb_compat
 
-.PHONY: all clean test test-c test-c-ext test-mmdb build-rust ci-local ci-quick fmt clippy docs check-docs
+.PHONY: all clean test test-c test-c-ext test-mmdb build-rust ci-local ci-quick fmt clippy docs check-docs check-wasm
 
 all: build-rust test
 
@@ -98,6 +98,7 @@ ci-local:
 	@$(MAKE) fmt
 	@$(MAKE) clippy
 	@$(MAKE) check-docs
+	@$(MAKE) check-wasm
 	@$(MAKE) test-rust
 	@$(MAKE) test-doc
 	@$(MAKE) build-rust
@@ -157,6 +158,15 @@ test-doc:
 	@cargo test --workspace --doc
 	@echo "✅ Doc tests OK"
 
+# Check WASM compilation
+check-wasm:
+	@echo "\n🌐 Checking WASM compilation..."
+	@rustup target add wasm32-unknown-unknown 2>/dev/null || true
+	@rustup target add wasm32-wasip1 2>/dev/null || true
+	@cargo check -p matchy-wasm --target wasm32-unknown-unknown
+	@cargo check -p matchy --target wasm32-wasip1 --no-default-features
+	@echo "✅ WASM OK"
+
 # Help
 help:
 	@echo "Matchy Development & CI"
@@ -169,6 +179,7 @@ help:
 	@echo "  fmt        - Check code formatting (cargo fmt --check)"
 	@echo "  clippy     - Run clippy lints with warnings as errors"
 	@echo "  check-docs - Build docs with warnings as errors"
+	@echo "  check-wasm - Check WASM and WASI compilation"
 	@echo "  test-rust  - Run all Rust tests"
 	@echo "  test-doc   - Run documentation tests"
 	@echo ""
