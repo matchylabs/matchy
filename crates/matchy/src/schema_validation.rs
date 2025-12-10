@@ -26,7 +26,9 @@
 use crate::schemas::{get_schema, get_schema_info};
 use jsonschema::Validator;
 use matchy_data_format::DataValue;
+use matchy_format::EntryValidator;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
 use thiserror::Error;
 
@@ -222,6 +224,28 @@ fn data_map_to_json(
             message: format!("Failed to serialize data for validation: {}", e),
         }],
     })
+}
+
+/// Implement EntryValidator trait for SchemaValidator
+///
+/// This allows SchemaValidator to be used with DatabaseBuilder::with_validator()
+/// for automatic schema validation during database construction.
+impl EntryValidator for SchemaValidator {
+    fn validate(
+        &self,
+        key: &str,
+        data: &HashMap<String, DataValue>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.validate(data).map_err(|e| {
+            let error_msg = format!("Entry '{}': {}", key, e);
+            Box::new(SchemaValidationError {
+                errors: vec![ValidationErrorDetail {
+                    path: String::new(),
+                    message: error_msg,
+                }],
+            }) as Box<dyn Error + Send + Sync>
+        })
+    }
 }
 
 #[cfg(test)]

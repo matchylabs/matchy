@@ -17,6 +17,8 @@ pub enum FormatError {
     LiteralHashError(String),
     /// I/O error
     IoError(String),
+    /// Entry validation error (schema validation failed)
+    ValidationError(String),
     /// Generic error
     Other(String),
 }
@@ -30,6 +32,7 @@ impl fmt::Display for FormatError {
             FormatError::PatternError(msg) => write!(f, "Pattern error: {}", msg),
             FormatError::LiteralHashError(msg) => write!(f, "Literal hash error: {}", msg),
             FormatError::IoError(msg) => write!(f, "I/O error: {}", msg),
+            FormatError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
             FormatError::Other(msg) => write!(f, "{}", msg),
         }
     }
@@ -89,6 +92,7 @@ impl From<FormatError> for matchy_paraglob::error::ParaglobError {
             FormatError::IpTreeError(msg)
             | FormatError::PatternError(msg)
             | FormatError::LiteralHashError(msg)
+            | FormatError::ValidationError(msg)
             | FormatError::Other(msg) => ParaglobError::Other(msg),
         }
     }

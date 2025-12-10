@@ -5,6 +5,7 @@
 
 use crate::error::FormatError;
 use crate::mmdb::types::RecordSize;
+use crate::validation::EntryValidator;
 use matchy_data_format::{DataEncoder, DataValue};
 use matchy_ip_trie::IpTreeBuilder;
 use matchy_literal_hash::LiteralHashBuilder;
@@ -51,6 +52,8 @@ pub struct DatabaseBuilder {
     database_type: Option<String>,
     /// Optional custom description (language -> text)
     description: HashMap<String, String>,
+    /// Optional entry validator for schema validation
+    validator: Option<Box<dyn EntryValidator>>,
 }
 
 impl DatabaseBuilder {
@@ -63,6 +66,7 @@ impl DatabaseBuilder {
             match_mode,
             database_type: None,
             description: HashMap::new(),
+            validator: None,
         }
     }
 
@@ -106,6 +110,31 @@ impl DatabaseBuilder {
         self
     }
 
+    /// Set an entry validator for schema validation
+    ///
+    /// When a validator is set, all entries added via `add_entry()`, `add_ip()`,
+    /// `add_literal()`, or `add_glob()` will be validated before insertion.
+    /// If validation fails, the add method will return an error.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use matchy_format::{DatabaseBuilder, EntryValidator};
+    /// use matchy_match_mode::MatchMode;
+    ///
+    /// // Assuming you have a validator that implements EntryValidator
+    /// let validator: Box<dyn EntryValidator> = create_my_validator();
+    ///
+    /// let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
+    ///     .with_validator(validator);
+    ///
+    /// // Entries will be validated before insertion
+    /// builder.add_entry("1.2.3.4", data)?;
+    /// ```
+    pub fn with_validator(mut self, validator: Box<dyn EntryValidator>) -> Self {
+        self.validator = Some(validator);
+        self
+    }
+
     /// Set the match mode for pattern matching
     ///
     /// This controls whether literal and glob pattern matching is case-sensitive
@@ -133,15 +162,33 @@ impl DatabaseBuilder {
         self.match_mode = match_mode;
     }
 
+    /// Validate entry data if a validator is configured
+    fn validate_entry(
+        &self,
+        key: &str,
+        data: &HashMap<String, DataValue>,
+    ) -> Result<(), FormatError> {
+        if let Some(ref validator) = self.validator {
+            validator
+                .validate(key, data)
+                .map_err(|e| FormatError::ValidationError(format!("{}", e)))?;
+        }
+        Ok(())
+    }
+
     /// Add an entry with auto-detection
     ///
     /// Automatically detects whether the key is an IP address, literal string, or glob pattern.
     /// For explicit control, use `add_ip()`, `add_literal()`, or `add_glob()`.
+    ///
+    /// If a validator is configured via [`with_validator`](Self::with_validator), the entry
+    /// data will be validated before insertion. Returns an error if validation fails.
     pub fn add_entry(
         &mut self,
         key: &str,
         data: HashMap<String, DataValue>,
     ) -> Result<(), FormatError> {
+        self.validate_entry(key, &data)?;
         let entry_type = Self::detect_entry_type(key)?;
         let data_offset = self.encode_and_deduplicate_data(data);
 
@@ -157,6 +204,9 @@ impl DatabaseBuilder {
     ///
     /// Use this when the string contains characters like '*', '?', or '[' that should be
     /// matched literally rather than as glob wildcards.
+    ///
+    /// If a validator is configured via [`with_validator`](Self::with_validator), the entry
+    /// data will be validated before insertion. Returns an error if validation fails.
     ///
     /// # Example
     /// ```
@@ -177,6 +227,7 @@ impl DatabaseBuilder {
         pattern: &str,
         data: HashMap<String, DataValue>,
     ) -> Result<(), FormatError> {
+        self.validate_entry(pattern, &data)?;
         let data_offset = self.encode_and_deduplicate_data(data);
         self.entries.push(EntryRef {
             entry_type: EntryType::Literal(pattern.to_string()),
@@ -189,6 +240,9 @@ impl DatabaseBuilder {
     ///
     /// Use this to explicitly mark a pattern for glob matching, even if it doesn't
     /// contain obvious wildcard characters.
+    ///
+    /// If a validator is configured via [`with_validator`](Self::with_validator), the entry
+    /// data will be validated before insertion. Returns an error if validation fails.
     ///
     /// # Example
     /// ```
@@ -208,6 +262,7 @@ impl DatabaseBuilder {
         pattern: &str,
         data: HashMap<String, DataValue>,
     ) -> Result<(), FormatError> {
+        self.validate_entry(pattern, &data)?;
         let data_offset = self.encode_and_deduplicate_data(data);
         self.entries.push(EntryRef {
             entry_type: EntryType::Glob(pattern.to_string()),
@@ -240,12 +295,15 @@ impl DatabaseBuilder {
     /// Use this to explicitly mark an entry as an IP address. Will return an error
     /// if the string is not a valid IP address or CIDR notation.
     ///
+    /// If a validator is configured via [`with_validator`](Self::with_validator), the entry
+    /// data will be validated before insertion. Returns an error if validation fails.
+    ///
     /// # Arguments
     /// * `ip_or_cidr` - IP address or CIDR range (e.g., "192.168.1.0/24")
     /// * `data` - HashMap of key-value pairs to associate with the IP
     ///
     /// # Errors
-    /// Returns an error if the IP address or CIDR format is invalid.
+    /// Returns an error if the IP address or CIDR format is invalid, or if validation fails.
     ///
     /// # Example
     /// ```
@@ -265,6 +323,7 @@ impl DatabaseBuilder {
         ip_or_cidr: &str,
         data: HashMap<String, DataValue>,
     ) -> Result<(), FormatError> {
+        self.validate_entry(ip_or_cidr, &data)?;
         let entry_type = Self::parse_ip_entry(ip_or_cidr)?;
         let data_offset = self.encode_and_deduplicate_data(data);
 

@@ -11,6 +11,33 @@ use matchy::{DatabaseBuilder, MatchMode};
 let builder = DatabaseBuilder::new(MatchMode::CaseInsensitive);
 ```
 
+### With Schema Validation
+
+Use `DatabaseBuilderExt` to add automatic schema validation:
+
+```rust
+use matchy::{DatabaseBuilder, DatabaseBuilderExt, MatchMode, DataValue};
+use std::collections::HashMap;
+
+let mut builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("threatdb")?;
+
+// Entries are validated automatically
+let mut data = HashMap::new();
+data.insert("threat_level".to_string(), DataValue::String("high".to_string()));
+data.insert("category".to_string(), DataValue::String("malware".to_string()));
+data.insert("source".to_string(), DataValue::String("abuse.ch".to_string()));
+
+builder.add_entry("1.2.3.4", data)?;  // Validated against ThreatDB schema
+```
+
+When you use `with_schema()`:
+1. All entries are validated against the schema before insertion
+2. The `database_type` metadata is automatically set (e.g., `ThreatDB-v1`)
+3. Invalid entries fail immediately with descriptive error messages
+
+See [Schemas Reference](schemas.md) for available schemas.
+
 ### Match Modes
 
 `MatchMode` controls string matching behavior:
@@ -136,6 +163,75 @@ builder.add_entry("10.0.0.0/33", data)?; // Error: InvalidEntry (IPv4 max is /32
 **Invalid pattern:**
 ```rust
 builder.add_entry("[unclosed", data)?; // Error: PatternError
+```
+
+### Schema Validation
+
+When a schema is configured via `with_schema()`, data is validated against the schema:
+
+```rust
+use matchy::{DatabaseBuilder, DatabaseBuilderExt, MatchMode, DataValue};
+use std::collections::HashMap;
+
+let mut builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("threatdb")?;
+
+// Missing required fields
+let mut bad_data = HashMap::new();
+bad_data.insert("threat_level".to_string(), DataValue::String("high".to_string()));
+// Missing: category, source
+
+builder.add_entry("1.2.3.4", bad_data)?; 
+// Error: Validation error: Entry '1.2.3.4': "category" is a required property
+
+// Invalid enum value
+let mut bad_enum = HashMap::new();
+bad_enum.insert("threat_level".to_string(), DataValue::String("extreme".to_string())); // Invalid!
+bad_enum.insert("category".to_string(), DataValue::String("malware".to_string()));
+bad_enum.insert("source".to_string(), DataValue::String("test".to_string()));
+
+builder.add_entry("2.3.4.5", bad_enum)?;
+// Error: Validation error: Entry '2.3.4.5': "extreme" is not one of ["critical","high","medium","low","unknown"]
+```
+
+### Custom Validators
+
+For custom validation logic, implement the `EntryValidator` trait:
+
+```rust
+use matchy::{DatabaseBuilder, EntryValidator, MatchMode, DataValue};
+use matchy_format::FormatError;
+use std::collections::HashMap;
+use std::error::Error;
+
+struct RequiredFieldValidator {
+    required_fields: Vec<String>,
+}
+
+impl EntryValidator for RequiredFieldValidator {
+    fn validate(
+        &self,
+        key: &str,
+        data: &HashMap<String, DataValue>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        for field in &self.required_fields {
+            if !data.contains_key(field) {
+                return Err(format!(
+                    "Entry '{}': missing required field '{}'",
+                    key, field
+                ).into());
+            }
+        }
+        Ok(())
+    }
+}
+
+let validator = RequiredFieldValidator {
+    required_fields: vec!["name".to_string(), "category".to_string()],
+};
+
+let mut builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_validator(Box::new(validator));
 ```
 
 ## Building Large Databases

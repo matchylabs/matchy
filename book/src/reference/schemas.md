@@ -33,6 +33,33 @@ When you use a known schema name like `threatdb`:
 
 ### Rust API
 
+Use `DatabaseBuilderExt::with_schema()` for automatic validation during database building:
+
+```rust
+use matchy::{DatabaseBuilder, DatabaseBuilderExt, MatchMode, DataValue};
+use std::collections::HashMap;
+
+// Create builder with schema validation
+let mut builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("threatdb")?;
+
+// Entries are validated automatically
+let mut data = HashMap::new();
+data.insert("threat_level".to_string(), DataValue::String("high".to_string()));
+data.insert("category".to_string(), DataValue::String("malware".to_string()));
+data.insert("source".to_string(), DataValue::String("abuse.ch".to_string()));
+
+builder.add_entry("1.2.3.4", data)?;  // Validated!
+
+// Invalid data fails immediately
+let mut bad_data = HashMap::new();
+bad_data.insert("threat_level".to_string(), DataValue::String("extreme".to_string()));
+builder.add_entry("2.3.4.5", bad_data)?;  
+// Error: Validation error: Entry '2.3.4.5': "extreme" is not one of [...]
+```
+
+You can also query schema information directly:
+
 ```rust
 use matchy::schemas::{get_schema_info, is_known_database_type};
 
@@ -182,7 +209,37 @@ matchy build --database-type "MyCompany-ThreatFeed-v2" data.json -o custom.mxy
 
 ## Schema API Reference
 
-### Functions
+### DatabaseBuilderExt Trait
+
+The `DatabaseBuilderExt` trait adds schema support to `DatabaseBuilder`:
+
+```rust
+use matchy::{DatabaseBuilder, DatabaseBuilderExt, MatchMode};
+
+let builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("threatdb")?;
+```
+
+#### `with_schema(schema_name: &str) -> Result<Self, SchemaError>`
+
+Configures the builder with automatic schema validation.
+
+- All entries are validated before insertion
+- Sets `database_type` metadata automatically
+- Returns error if schema name is unknown
+
+```rust
+// Valid schema name
+let builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("threatdb")?;
+
+// Unknown schema - returns SchemaError
+let result = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+    .with_schema("unknown");
+assert!(result.is_err());
+```
+
+### Schema Lookup Functions
 
 ```rust
 use matchy::schemas::{
@@ -268,7 +325,8 @@ pub struct SchemaInfo {
 
 ## See Also
 
-- [matchy build](../commands/matchy-build.md) - Building with schema validation
+- [DatabaseBuilder](database-builder.md) - Building databases with schema validation
+- [matchy build](../commands/matchy-build.md) - CLI building with schema validation
 - [matchy validate](../commands/matchy-validate.md) - Validating databases
 - [Data Types Reference](data-types-ref.md) - Supported yield value types
 - [Input Formats](input-formats.md) - CSV/JSON input format details

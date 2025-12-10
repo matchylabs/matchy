@@ -103,6 +103,8 @@ pub mod misp_importer;
 // Internal format imports (not re-exported to users)
 use matchy_format::mmdb;
 
+/// Extension traits for DatabaseBuilder with schema support
+mod builder_ext;
 /// Batch processing infrastructure for efficient file analysis
 ///
 /// General-purpose building blocks for sequential or parallel line-oriented processing:
@@ -204,6 +206,16 @@ pub use matchy_format::DatabaseBuilder;
 /// type control.
 pub use matchy_format::EntryType;
 
+/// Trait for custom entry validation
+///
+/// Implement this trait to provide custom validation logic for entries
+/// being added to a [`DatabaseBuilder`]. Use with
+/// [`DatabaseBuilder::with_validator`](matchy_format::DatabaseBuilder::with_validator).
+///
+/// For schema-based validation, use [`DatabaseBuilderExt::with_schema`] instead,
+/// which uses the built-in [`SchemaValidator`].
+pub use matchy_format::EntryValidator;
+
 // Schema validation re-exports
 /// Schema validator for validating yield values against JSON schemas
 ///
@@ -230,6 +242,23 @@ pub use matchy_format::EntryType;
 pub use crate::schema_validation::{
     SchemaError, SchemaValidationError, SchemaValidator, ValidationErrorDetail,
 };
+
+/// Extension trait for adding schema validation to DatabaseBuilder
+///
+/// Import this trait to use the [`with_schema`](DatabaseBuilderExt::with_schema) method
+/// on [`DatabaseBuilder`].
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use matchy::{DatabaseBuilder, DatabaseBuilderExt, MatchMode};
+///
+/// let mut builder = DatabaseBuilder::new(MatchMode::CaseInsensitive)
+///     .with_schema("threatdb")?;
+///
+/// // Entries are now validated against ThreatDB schema
+/// ```
+pub use crate::builder_ext::DatabaseBuilderExt;
 
 // Version information
 /// Library version string

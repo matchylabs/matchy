@@ -4,8 +4,72 @@
 //! consistency checks.
 
 use crate::{ParaglobHeader, PatternDataMapping};
-use std::collections::HashSet;
+use matchy_data_format::DataValue;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use zerocopy::FromBytes;
+
+/// Trait for validating entry data before insertion into a database
+///
+/// Implement this trait to provide custom validation logic for entries
+/// being added to a [`DatabaseBuilder`](crate::DatabaseBuilder).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use matchy_format::{DatabaseBuilder, EntryValidator};
+/// use matchy_data_format::DataValue;
+/// use std::collections::HashMap;
+/// use std::error::Error;
+///
+/// struct RequiredFieldValidator {
+///     required_fields: Vec<String>,
+/// }
+///
+/// impl EntryValidator for RequiredFieldValidator {
+///     fn validate(
+///         &self,
+///         key: &str,
+///         data: &HashMap<String, DataValue>,
+///     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         for field in &self.required_fields {
+///             if !data.contains_key(field) {
+///                 return Err(format!(
+///                     "Entry '{}': missing required field '{}'",
+///                     key, field
+///                 ).into());
+///             }
+///         }
+///         Ok(())
+///     }
+/// }
+///
+/// let validator = RequiredFieldValidator {
+///     required_fields: vec!["threat_level".to_string(), "source".to_string()],
+/// };
+///
+/// let mut builder = DatabaseBuilder::new(MatchMode::CaseSensitive)
+///     .with_validator(Box::new(validator));
+///
+/// // This will fail validation
+/// builder.add_entry("1.2.3.4", HashMap::new())?;
+/// ```
+pub trait EntryValidator: Send + Sync {
+    /// Validate entry data before insertion
+    ///
+    /// # Arguments
+    /// * `key` - The entry key (IP, domain, pattern, etc.)
+    /// * `data` - The data map to be associated with this entry
+    ///
+    /// # Returns
+    /// * `Ok(())` if validation passes
+    /// * `Err(...)` with a descriptive error message if validation fails
+    fn validate(
+        &self,
+        key: &str,
+        data: &HashMap<String, DataValue>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>>;
+}
 
 /// Validation result for format-level checks
 #[derive(Debug, Clone)]

@@ -21,4 +21,6 @@ pub use error::FormatError;
 pub use matchy_literal_hash;
 pub use mmdb_builder::{BuilderStats, DatabaseBuilder, EntryType};
 pub use offset_format::*;
-pub use validation::{validate_data_mapping_consistency, FormatStats, FormatValidationResult};
+pub use validation::{
+    validate_data_mapping_consistency, EntryValidator, FormatStats, FormatValidationResult,
+};
